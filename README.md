@@ -21,10 +21,21 @@ También funciona tal cual en GitHub Pages.
 
 | Modo | Vista | Descripción |
 |------|-------|-------------|
-| **[1] TÁCTICO** | Cenital | Campaña por oleadas vista desde arriba. Flechas giran el torso (o el torso sigue al cursor si usas ratón); ↑↓ ajustan el alcance de la mira. Rueda = zoom. |
+| **[1] TÁCTICO** | Cenital | Campaña por oleadas vista desde arriba. Cámara fija a máxima apertura que se adelanta hacia donde apunta el torso. Flechas giran el torso (o el torso sigue al cursor si usas ratón); ↑↓ ajustan el alcance de la mira. |
 | **[2] CABINA** | Primera persona | Campaña por oleadas desde el interior de la cabina 3D con instrumentos. Flechas (o ratón capturado) mueven torso y mira. |
 | **[3] ENTRENAMIENTO** | Las dos (cambia con **B**) | Práctica libre para aprender los controles. Ver más abajo. |
 | **[4] BATALLA 5 VS 5** | Las dos (cambia con **B**) | Tu escuadra contra otra: asalto o defensa de un punto, con eyección y refuerzos. Ver más abajo. |
+
+### Visibilidad: sólo se fija lo que se ve
+
+En todos los modos, un enemigo sólo se puede **fijar como blanco** (Q/Tab, fijación automática, ratón, misiles guiados, orden "atacad mi blanco") si es **visible**:
+
+1. está en pantalla,
+2. está dentro del alcance visual: depende de la hora (≈ 680 m de día, ≈ 590 m al atardecer, ≈ 360 m de noche) y llega a 650 m con **visión térmica**,
+3. hay **línea de visión** desde tu cabina (edificios, colinas y otros mechs tapan),
+4. no está oculto en un bosque a más de 150 m (la térmica sí ve a través del follaje).
+
+Si el blanco deja de verse más de 0,6 s se pierde ("BLANCO PERDIDO"). Los enemigos en pantalla pero no visibles aparecen con un recuadro punteado y atenuado, y en el radar como un punto apagado: el radar sigue detectándolos, pero no puedes fijarlos. Siempre puedes disparar a mano hacia donde apuntes.
 
 ### Entrenamiento
 
@@ -91,7 +102,7 @@ Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (ba
 
 Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del torso se fija solo.
 
-**Con ratón (opcional):** en modo táctico el torso sigue al cursor; en cabina, clic para capturar el ratón y mirar. Clic izq. = G1, clic der. = G2, rueda = zoom (táctico). El juego cambia solo entre ratón y teclado según el último que uses para apuntar.
+**Con ratón (opcional):** en modo táctico el torso sigue al cursor; en cabina, clic para capturar el ratón y mirar. Clic izq. = G1, clic der. = G2. El juego cambia solo entre ratón y teclado según el último que uses para apuntar.
 
 ## Hangar
 

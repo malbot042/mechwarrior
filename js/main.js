@@ -75,10 +75,10 @@ const state = {
   waveTimer: 0, time: 0,
   shake: 0, flash: 0, staticN: 0,
   msgs: [],
-  zoom: 70,
+  zoom: 260,          // altura fija de la cámara táctica (apertura máxima)
   input: 'keys',      // keys | mouse (último dispositivo usado para apuntar)
   track: false,       // seguimiento automático del blanco
-  aimDist: 60,
+  aimDist: 120,
   menuSel: 0,
   training: false, trainArmed: false, showLessons: true, lessons: null, respawns: [],
   target: null,
@@ -256,7 +256,7 @@ function startGame(mode) {
   else if (state.battleMode) startBattle();
   else spawnWave();
   if (!state.training && !state.battleMode) msg(mode === 'top' ? 'MODO TÁCTICO — FLECHAS APUNTAR · Q BLANCO' : 'MODO CABINA — FLECHAS APUNTAR · Q BLANCO', C.cyan, 4);
-  state.track = false; state.aimDist = 60;
+  state.track = false; state.aimDist = 120;
 }
 
 function applyMode() {
@@ -603,13 +603,44 @@ function moveEntity(e, dt) {
   }
 }
 
+// ---------------------------------------------------------------- visibilidad
+// Un enemigo es "visible" (y por tanto fijable) si está en pantalla, dentro del
+// alcance visual (niebla / noche; la térmica ve más lejos y a través del follaje)
+// y en línea de visión desde la cabina del jugador. Se recalcula 10 veces por
+// segundo y se mantiene 0,6 s para que el blanco no parpadee.
+const VIS_GRACE = 0.6;
+let visTimer = 0;
+function visRange() { return state.thermal ? 650 : world.T.fogFar * 0.85; }
+function updateVisibility(dt) {
+  visTimer -= dt;
+  if (visTimer > 0 || !player || !player.alive) return;
+  visTimer = 0.1;
+  player.model.root.updateMatrixWorld(true);
+  const eye = player.model.cockpit.getWorldPosition(V());
+  const range = visRange();
+  for (const e of entities) {
+    if (!e.alive || !hostile(e, player)) continue;
+    const c = center(e);
+    const p = c.clone().project(camera);
+    if (p.z > 1 || Math.abs(p.x) > 1.02 || Math.abs(p.y) > 1.02) continue;
+    const d = Math.hypot(c.x - eye.x, c.z - eye.z);
+    if (d > range) continue;
+    if (!state.thermal && d > 150 && world.forestCover(e.pos.x, e.pos.z) >= 4) continue;
+    const dir = c.clone().sub(eye);
+    const len = dir.length(); dir.normalize();
+    const tr = traceSegment(eye, dir, len + 2, player);
+    if (tr.ent === e) e.seenT = state.time;
+  }
+}
+const isVisible = (e) => e.alive && e.seenT !== undefined && state.time - e.seenT < VIS_GRACE;
+
 // ---------------------------------------------------------------- jugador
 // Control por teclado: flechas apuntan el torso, Q/Tab cicla blancos (y activa
 // el seguimiento automático del torso), R activa/desactiva el seguimiento.
 function cycleTarget() {
-  const list = entities.filter(e => e.alive && hostile(e, player))
+  const list = entities.filter(e => e.alive && hostile(e, player) && isVisible(e))
     .sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
-  if (!list.length) { msg('SIN BLANCOS', C.dim, 1.2); return; }
+  if (!list.length) { msg('SIN BLANCOS VISIBLES', C.dim, 1.2); return; }
   const i = list.indexOf(state.target);
   state.target = list[(i + 1) % list.length];
   lesson('target');
@@ -639,6 +670,10 @@ function updatePlayer(dt) {
   const ay = (keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0);
   if (ax) state.track = false;
   if (state.track && !(state.target && state.target.alive)) state.track = false;
+  if (state.target && !isVisible(state.target)) {
+    if (state.track) msg('BLANCO PERDIDO — SIN LÍNEA DE VISIÓN', C.warn, 1.5);
+    state.target = null; state.track = false;
+  }
   const powered = p.shutdown <= 0;
 
   if (state.mode === 'top') {
@@ -652,7 +687,7 @@ function updatePlayer(dt) {
       const onObs = hits.length && hits[0].distance < ground.distanceTo(raycaster.ray.origin);
       if (onObs) ground = hits[0].point.clone();
       for (const e of entities) {
-        if (!e.alive || !hostile(e, p)) continue;
+        if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
         const d = Math.hypot(e.pos.x - ground.x, e.pos.z - ground.z);
         const onRay = raycaster.ray.intersectsSphere(new THREE.Sphere(center(e), 5.5));
         const score = onRay ? 0 : d;
@@ -663,7 +698,7 @@ function updatePlayer(dt) {
     } else {
       // apuntar con teclado
       if (powered) p.torsoYaw = clamp(p.torsoYaw + ax * 1.7 * dt, -1.9, 1.9);
-      state.aimDist = clamp(state.aimDist + ay * 90 * dt, 15, 260);
+      state.aimDist = clamp(state.aimDist + ay * 120 * dt, 15, 320);
       if (state.track) {
         tgt = state.target;
         if (powered) turnTorsoTo(p, yawTo(p.pos, tgt.pos), 2.6, dt);
@@ -672,7 +707,7 @@ function updatePlayer(dt) {
         const ty = p.heading + p.torsoYaw;
         let best = 0.14;
         for (const e of entities) {
-          if (!e.alive || !hostile(e, p) || e.pos.distanceTo(p.pos) > 400) continue;
+          if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
           const ang = Math.abs(wrap(yawTo(p.pos, e.pos) - ty));
           if (ang < best) { best = ang; tgt = e; }
         }
@@ -708,7 +743,7 @@ function updatePlayer(dt) {
       // fijación de blanco: el enemigo más cercano al centro de la vista
       let tgt = null, best = 0.12;
       for (const e of entities) {
-        if (!e.alive || !hostile(e, p)) continue;
+        if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
         const to = center(e).sub(cp);
         if (to.length() > 500) continue;
         const ang = to.normalize().angleTo(cd);
@@ -915,7 +950,10 @@ function updateCamera(dt) {
   }
   if (state.mode === 'top' || state.screen === 'dead' || state.screen === 'result' || pod) {
     const z = state.zoom;
-    camLook.lerp(_v1.set(focus.x, focus.y, focus.z), Math.min(1, dt * 6));
+    // anticipación: la cámara se adelanta hacia donde apunta el torso
+    const ahead = pod || !p.alive ? 0 : 45;
+    const fy = p.heading + p.torsoYaw;
+    camLook.lerp(_v1.set(focus.x - Math.sin(fy) * ahead, focus.y, focus.z - Math.cos(fy) * ahead), Math.min(1, dt * 2.5));
     camera.position.set(camLook.x, camLook.y + z, camLook.z + z * 0.42);
     camera.lookAt(camLook);
     if (shake > 0) camera.position.add(_v1.set((Math.random() - 0.5) * shake * 2, 0, (Math.random() - 0.5) * shake * 2));
@@ -938,7 +976,7 @@ function radarBlips() {
   for (const e of entities) {
     if (!e.alive || e === player) continue;
     const ally = !hostile(e, player);
-    list.push({ x: e.pos.x, z: e.pos.z, type: e.kind, targeted: e === state.target, color: ally ? C.ally : undefined });
+    list.push({ x: e.pos.x, z: e.pos.z, type: e.kind, targeted: e === state.target, color: ally ? C.ally : isVisible(e) ? undefined : 'rgba(255,90,64,0.35)' });
   }
   if (state.battleMode && state.battle) list.push({ x: state.battle.point.x, z: state.battle.point.z, type: 'obj', r: state.battle.radius, color: C.white });
   return list;
@@ -981,6 +1019,13 @@ function drawTopHud() {
     const s = proj(center(e));
     if (!s.ok) continue;
     if (!hostile(e, p)) { allyMarker(e, s.x, s.y - 14, true); continue; }
+    if (!isVisible(e)) {
+      // en pantalla pero sin línea de visión / fuera de alcance visual: no fijable
+      g.setLineDash([2, 3]);
+      brackets(g, s.x - 8, s.y - 8, 16, 16, 'rgba(255,90,64,0.35)', 4);
+      g.setLineDash([]);
+      continue;
+    }
     const isT = e === state.target;
     const w = e.kind === 'tank' ? 14 : 20;
     brackets(g, s.x - w / 2, s.y - w / 2, w, w, isT ? C.white : 'rgba(255,90,64,0.8)', 4);
@@ -992,6 +1037,11 @@ function drawTopHud() {
   }
   // dirección de piernas y torso
   const ps = proj(_v3.set(p.pos.x, p.pos.y + 1, p.pos.z));
+  if (p.alive) {
+    const pc = proj(center(p));
+    g.strokeStyle = 'rgba(134,255,156,0.7)'; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(pc.x, pc.y, 13, 0, Math.PI * 2); g.stroke(); g.lineWidth = 1;
+  }
   const lf = proj(_v3.copy(p.pos).addScaledVector(fwd(p.heading, _v2), 14));
   g.strokeStyle = 'rgba(134,255,156,0.45)'; g.setLineDash([3, 3]);
   g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(lf.x, lf.y); g.stroke(); g.setLineDash([]);
@@ -1054,6 +1104,7 @@ function drawCockpitHud() {
     if (!s.ok || s.x < 0 || s.x > VW || s.y < 0 || s.y > VH) continue;
     const d = c.distanceTo(camera.position);
     if (!hostile(e, p)) { allyMarker(e, s.x, s.y - clamp(1600 / d, 8, 90) * 0.6, d < 220); continue; }
+    if (!isVisible(e)) continue;
     const w = clamp(1600 / d, 8, 90) * (e.kind === 'tank' ? 0.7 : 1);
     const isT = e === state.target;
     brackets(g, s.x - w / 2, s.y - w / 2, w, w, isT ? C.white : 'rgba(255,90,64,0.85)', Math.max(3, w * 0.2));
@@ -1208,7 +1259,7 @@ function drawMenu() {
     'FLECHAS APUNTAR TORSO · Q/TAB SIGUIENTE BLANCO · R SEGUIMIENTO',
     'ESPACIO/J GRUPO 1 · F/K GRUPO 2 · E/L GRUPO 3',
     'V VISIÓN TÉRMICA · T PALETA CRT · ESC PAUSA',
-    'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA · RUEDA ZOOM',
+    'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA',
   ];
   lines.forEach((l, i) => txt(g, l, cx, 358 + i * 15, { size: 10, align: 'center', color: C.main, glow: 2 }));
   if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2 / 3 / 4', cx, 442, { size: 12, align: 'center', color: C.white });
@@ -1473,7 +1524,7 @@ function drawObjectiveMarker() {
   const pr = wp.clone().project(camera);
   let x = (pr.x + 1) / 2 * VW, y = (1 - pr.y) / 2 * VH;
   if (pr.z > 1) { x = VW - x; y = VH - 10; }
-  const m = 24, top = 60, bottom = VH - 120;
+  const m = 30, top = 60, bottom = VH - 140;
   const off = x < m || x > VW - m || y < top || y > bottom || pr.z > 1;
   x = clamp(x, m, VW - m); y = clamp(y, top, bottom);
   const ours = b.attackers === 'A';
@@ -2033,6 +2084,7 @@ function frameLoop(now) {
   state.time += dt;
 
   if (state.screen === 'play') {
+    updateVisibility(dt);
     if (player.alive) updatePlayer(dt);
     for (const e of entities) if (e.alive && e.ai) updateAI(e, dt);
     for (let i = entities.length - 1; i >= 0; i--) {
@@ -2068,7 +2120,9 @@ function frameLoop(now) {
 
   updateCamera(dt);
   camera.updateMatrixWorld();
-  world.update(player ? player.pos : V(), camera, state.screen === 'pause' ? 0 : dt, state.time);
+  const topView = state.screen !== 'menu' && state.screen !== 'hangar' && (state.mode === 'top' || state.ejected || state.screen === 'dead' || state.screen === 'result');
+  world.setView(topView ? state.zoom : 0);
+  world.update(topView ? camLook : (player ? player.pos : V()), camera, state.screen === 'pause' ? 0 : dt, state.time);
 
   if (cockpit.group.visible && player) {
     cockpit.update(dt, state.time, {
@@ -2217,7 +2271,6 @@ cv.addEventListener('mousedown', (e) => {
 });
 window.addEventListener('mouseup', (e) => { mouse.b[e.button] = false; });
 cv.addEventListener('contextmenu', (e) => e.preventDefault());
-cv.addEventListener('wheel', (e) => { state.zoom = clamp(state.zoom + e.deltaY * 0.06, 35, 160); }, { passive: true });
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== cv && state.screen === 'play' && state.mode === 'cockpit' && !state.ejected) state.screen = 'pause';
 });

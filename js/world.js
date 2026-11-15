@@ -386,6 +386,19 @@ export function buildWorld(scene, zoneId = 'desierto', timeId = 'dusk') {
     terrain, obstacles, sky, sun, water, trees,
     headlights: !!T.headlights,
     trample, forestCover,
+    // vista táctica: la niebla se desplaza con la altura de la cámara (se sigue
+    // viendo el mismo radio alrededor del mech) y las sombras cubren más terreno
+    setView(camDist) {
+      if (this._view === camDist) return;
+      this._view = camDist;
+      const off = camDist * 0.95;
+      scene.fog.near = T.fogNear + off;
+      scene.fog.far = T.fogFar + off;
+      const r = camDist ? 240 : 130;
+      sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
+      sc.far = camDist ? 700 : 500;
+      sc.updateProjectionMatrix();
+    },
     update(focus, camera, dt = 0, t = 0) {
       sky.position.copy(camera.position);
       sun.position.copy(focus).add(sunOffset);
