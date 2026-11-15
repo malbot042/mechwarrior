@@ -1,7 +1,7 @@
 // Utilidades de dibujo 2D para el HUD y las pantallas de cabina.
 export const C = {
   main: '#86ff9c', dim: 'rgba(134,255,156,0.35)', faint: 'rgba(134,255,156,0.12)',
-  warn: '#ffb020', bad: '#ff4a30', cyan: '#5fe0ff', white: '#eaffea', enemy: '#ff5a40',
+  warn: '#ffb020', bad: '#ff4a30', cyan: '#5fe0ff', white: '#eaffea', enemy: '#ff5a40', ally: '#5fa8ff',
 };
 
 export function txt(g, s, x, y, o = {}) {
@@ -97,6 +97,11 @@ export function drawRadar(g, cx, cy, r, origin, rot, blips, range, t, cone) {
     if (d > r - 3) { px = cx + sx / d * (r - 3); py = cy + sy / d * (r - 3); }
     g.fillStyle = b.color ?? C.enemy;
     g.shadowColor = g.fillStyle; g.shadowBlur = 5;
+    if (b.type === 'obj') {
+      g.strokeStyle = b.color; g.globalAlpha = 0.5 + 0.4 * Math.sin(t * 4);
+      g.beginPath(); g.arc(px, py, Math.max(3, (b.r ?? 10) * s), 0, Math.PI * 2); g.stroke();
+      g.globalAlpha = 1; g.shadowBlur = 0; continue;
+    }
     if (b.type === 'obs') { g.shadowBlur = 0; g.globalAlpha = 0.35; g.fillRect(px - 2, py - 2, 4, 4); g.globalAlpha = 1; }
     else if (b.type === 'tank') g.fillRect(px - 2, py - 2, 4, 4);
     else { g.beginPath(); g.moveTo(px, py - 4); g.lineTo(px + 3.5, py + 3); g.lineTo(px - 3.5, py + 3); g.closePath(); g.fill(); }
