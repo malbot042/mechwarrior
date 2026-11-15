@@ -47,6 +47,22 @@ En todos los modos, un enemigo sólo se puede **fijar como blanco** (Q/Tab, fija
 
 Si el blanco deja de verse más de 0,6 s se pierde ("BLANCO PERDIDO"). Los enemigos en pantalla pero no visibles aparecen con un recuadro punteado y atenuado, y en el radar como un punto apagado: el radar sigue detectándolos, pero no puedes fijarlos.
 
+### Las mismas reglas para todos los mechs
+
+Alcance, visibilidad y enfrentamiento funcionan igual para ti, tus aliados y los enemigos:
+
+| Regla | Jugador | IA (aliados y enemigos) |
+|-------|---------|-------------------------|
+| Alcance visual (día / atardecer / noche) | ≈ 680 / 590 / 360 m (650 m con térmica) | ≈ 680 / 590 / 360 m (sin térmica) |
+| Línea de visión desde la cabina | sí | sí |
+| Oculto en bosque a más de 150 m | no se ve (salvo térmica) | no se ve |
+| Blanco | enemigo visible más cercano, se mantiene mientras se vea (0,6 s de margen) | igual (los camiones del convoy cuentan como más cercanos para el enemigo) |
+| Giro del torso | ±109° respecto a las piernas | igual |
+| Disparo | sólo con el blanco visible y el torso encarado (±7°) | igual, y con la línea de tiro libre de compañeros |
+| Alcance de las armas | las que no llegan no disparan | igual |
+
+La IA conoce la posición de los enemigos cercanos por radar (420 m) y se mueve hacia ellos (*BUSCANDO*), pero no puede fijarlos ni dispararles hasta verlos. La única diferencia es la puntería: tus disparos van al centro del blanco y los de la IA tienen dispersión según su pericia, la distancia y si el blanco se mueve o está en el bosque.
+
 ### Entrenamiento
 
 Modo libre para practicar sin presión:
@@ -89,7 +105,7 @@ En todos los objetivos, además, gana quien deje al otro **sin refuerzos y sin m
 | **3** | OBJETIVO | Asalto/Defensa: van al punto ALFA y se quedan dentro · Conquista: toman el punto más cercano a ti que no sea vuestro · Escolta: se pegan al convoy |
 | **4** | LIBRE ACCIÓN | Comportamiento por defecto según el objetivo de la misión |
 
-Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (bajo el radar) muestra la orden activa y, por aliado, blindaje y estado (SIGUIENDO, ATACANDO, AL PUNTO, COMBATE, AVANZANDO, EYECTADO…). El blanco ordenado lleva una marca azul **ESCUADRA** en el HUD.
+Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (bajo el radar) muestra la orden activa y, por aliado, blindaje y estado (SIGUIENDO, ATACANDO, AL PUNTO, COMBATE, AVANZANDO, BUSCANDO, EYECTADO…). El blanco ordenado lleva una marca azul **ESCUADRA** en el HUD.
 
 ### Controles
 

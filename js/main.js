@@ -576,32 +576,38 @@ function moveEntity(e, dt) {
 }
 
 // ---------------------------------------------------------------- visibilidad
-// Un enemigo es "visible" (y por tanto fijable) si está en pantalla, dentro del
-// alcance visual (niebla / noche; la térmica ve más lejos y a través del follaje)
-// y en línea de visión desde la cabina del jugador. Se recalcula 10 veces por
-// segundo y se mantiene 0,6 s para que el blanco no parpadee.
+// Reglas comunes a TODOS los mechs (jugador, aliados y enemigos): un mech ve a
+// otro si está dentro de su alcance visual (niebla / noche; la térmica del
+// jugador ve más lejos y a través del follaje), no está oculto en un bosque a
+// más de 150 m y hay línea de visión desde su cabina. Al jugador se le exige
+// además que el enemigo esté en pantalla. Un blanco visto se mantiene 0,6 s.
 const VIS_GRACE = 0.6;
 let visTimer = 0;
-function visRange() { return state.thermal ? 650 : world.T.fogFar * 0.85; }
+function visRange(o = player) { return o.isPlayer && state.thermal ? 650 : world.T.fogFar * 0.85; }
+const eyeOf = (o) => _v1.set(o.pos.x, o.pos.y + o.centerH + 1.2 * (o.scale ?? 1), o.pos.z).clone();
+function canSee(o, t, eye = eyeOf(o)) {
+  if (!t.alive) return false;
+  const c = center(t);
+  const d = Math.hypot(c.x - eye.x, c.z - eye.z);
+  if (d > visRange(o)) return false;
+  const thermal = o.isPlayer && state.thermal;
+  if (!thermal && d > 150 && world.forestCover(t.pos.x, t.pos.z) >= 4) return false;
+  const dir = c.clone().sub(eye);
+  const len = dir.length(); dir.normalize();
+  return traceSegment(eye, dir, len + 2, o).ent === t;
+}
 function updateVisibility(dt) {
   visTimer -= dt;
   if (visTimer > 0 || !player || !player.alive) return;
   visTimer = 0.1;
   player.model.root.updateMatrixWorld(true);
   const eye = player.model.cockpit.getWorldPosition(V());
-  const range = visRange();
   for (const e of entities) {
     if (!e.alive || !hostile(e, player)) continue;
     const c = center(e);
     const p = c.clone().project(camera);
     if (p.z > 1 || Math.abs(p.x) > 1.02 || Math.abs(p.y) > 1.02) continue;
-    const d = Math.hypot(c.x - eye.x, c.z - eye.z);
-    if (d > range) continue;
-    if (!state.thermal && d > 150 && world.forestCover(e.pos.x, e.pos.z) >= 4) continue;
-    const dir = c.clone().sub(eye);
-    const len = dir.length(); dir.normalize();
-    const tr = traceSegment(eye, dir, len + 2, player);
-    if (tr.ent === e) e.seenT = state.time;
+    if (canSee(player, e, eye)) e.seenT = state.time;
   }
 }
 const isVisible = (e) => e.alive && e.seenT !== undefined && state.time - e.seenT < VIS_GRACE;
@@ -733,18 +739,42 @@ function updateAI(e, dt) {
   // orden de escuadra (sólo aliados del jugador en batalla)
   const ord = state.battleMode && state.battle && e.team === 'A' ? state.battle.order : null;
   const ordType = ord ? ord.type : 'free';
-  if (ordType === 'attack' && ord.target.alive) ai.target = ord.target;
-  else if (ai.scan <= 0 || !ai.target || !ai.target.alive) {
-    ai.scan = 0.8 + Math.random() * 0.8;
+  // ¿sigue viendo a su blanco? (mismas reglas que el jugador)
+  ai.visT = (ai.visT ?? 0) - dt;
+  if (ai.target && ai.visT <= 0) {
+    ai.visT = 0.25;
+    if (canSee(e, ai.target)) ai.seenT = state.time;
+  }
+  const seesTarget = () => ai.target && ai.target.alive && ai.seenT !== undefined && state.time - ai.seenT < VIS_GRACE;
+  if (ordType === 'attack' && ord.target.alive) {
+    if (ai.target !== ord.target) { ai.target = ord.target; ai.seenT = undefined; ai.visT = 0; }
+  } else if (!seesTarget() && ai.scan <= 0) {
+    // nuevo blanco: el enemigo visible más cercano (los camiones del convoy pesan más)
+    ai.scan = 0.6 + Math.random() * 0.6;
+    const eye = eyeOf(e);
+    const cands = entities.filter(o => o.alive && hostile(e, o))
+      .map(o => [o, Math.hypot(o.pos.x - e.pos.x, o.pos.z - e.pos.z)])
+      .filter(([, d]) => d < visRange(e))
+      .sort((a, b) => a[1] * (a[0].kind === 'convoy' ? 0.55 : 1) - b[1] * (b[0].kind === 'convoy' ? 0.55 : 1))
+      .slice(0, 4);
+    const seen = cands.find(([o]) => canSee(e, o, eye));
+    if (seen) { ai.target = seen[0]; ai.seenT = state.time; ai.visT = 0.25; }
+    else if (ai.target && !ai.target.alive) ai.target = null;
+  }
+  // contacto de radar: el enemigo más cercano aunque no se vea (sólo para moverse)
+  ai.contactT = (ai.contactT ?? 0) - dt;
+  if (ai.contactT <= 0) {
+    ai.contactT = 1.5;
     let best = null, bd = ai.sense ?? Infinity;
     for (const o of entities) {
       if (!o.alive || !hostile(e, o)) continue;
-      const d = Math.hypot(o.pos.x - e.pos.x, o.pos.z - e.pos.z) * (o.kind === 'convoy' ? 0.55 : o.isPlayer ? 0.85 : 1);
+      const d = Math.hypot(o.pos.x - e.pos.x, o.pos.z - e.pos.z);
       if (d < bd) { bd = d; best = o; }
     }
-    ai.target = best;
+    ai.contact = best;
   }
-  const tgt = ai.target;
+  const tgt = ai.target && ai.target.alive ? ai.target : null;
+  const visibleTgt = seesTarget();
   let desired = e.heading;
   e.throttle = 0;
   const goal = ordType === 'point' && ord.point ? ord.point.pos : ai.goal;
@@ -772,12 +802,15 @@ function updateAI(e, dt) {
   } else if (goal && ai.role === 'defend' && dGoal > ai.leash) {
     desired = yawTo(e.pos, goal); e.throttle = 1;                   // volver a la zona
     ai.status = 'REPLEGANDO';
-  } else if (tgt && dT < (goal ? 320 : Infinity)) {
+  } else if (tgt && visibleTgt && dT < (goal ? 320 : Infinity)) {
     ai.status = 'COMBATE';
     const toYaw = yawTo(e.pos, tgt.pos);
     if (dT > ai.range + 40) { desired = toYaw; e.throttle = 1; }
     else if (dT < ai.range - 40) { desired = toYaw + Math.PI * 0.75 * ai.strafe; e.throttle = 0.7; }
     else { desired = toYaw + Math.PI / 2 * ai.strafe; e.throttle = 0.75; }
+  } else if (!goal && ai.contact) {
+    desired = yawTo(e.pos, ai.contact.pos); e.throttle = 0.8;                // buscar el contacto de radar
+    ai.status = 'BUSCANDO';
   } else if (goal) {
     desired = yawTo(e.pos, goal) + Math.PI / 2 * ai.strafe; e.throttle = 0.4;  // patrullar el punto
     ai.status = 'PATRULLANDO';
@@ -790,15 +823,17 @@ function updateAI(e, dt) {
   if (ai.static) e.throttle = 0;   // diana fija: sólo gira el torso
   else e.heading = wrap(e.heading + clamp(wrap(desired - e.heading), -e.turnRate * dt, e.turnRate * dt));
   // torso / torreta
-  const lim = e.kind === 'tank' ? Math.PI : 1.7;
-  if (!tgt || dT > 480) { e.torsoYaw += clamp(-e.torsoYaw, -2 * dt, 2 * dt); return; }
+  // mismas reglas que el jugador: torso ±109°, disparo sólo con el blanco
+  // visible, el torso encarado (±7°) y armas a su alcance
+  const lim = e.kind === 'tank' ? Math.PI : TORSO_LIMIT;
+  if (!tgt || !visibleTgt) { e.torsoYaw += clamp(-e.torsoYaw, -2 * dt, 2 * dt); return; }
   const toYaw = yawTo(e.pos, tgt.pos);
   const tDes = clamp(wrap(toYaw - e.heading), -lim, lim);
-  e.torsoYaw += clamp(wrap(tDes - e.torsoYaw), -2 * dt, 2 * dt);
-  const aligned = Math.abs(wrap(toYaw - e.heading - e.torsoYaw)) < 0.18;
+  e.torsoYaw += clamp(wrap(tDes - e.torsoYaw), -2.6 * dt, 2.6 * dt);
+  const aligned = Math.abs(wrap(toYaw - e.heading - e.torsoYaw)) < FIRE_ARC;
   if (!aligned || ai.fireT > 0 || e.heat > 70) return;
   if (state.training && !state.trainArmed) return;   // dianas sin munición
-  // línea de visión
+  // la línea de tiro debe estar libre (no disparar a través de un compañero)
   const eye = center(e);
   const pc = center(tgt);
   const dir = pc.clone().sub(eye);
@@ -806,8 +841,7 @@ function updateAI(e, dt) {
   const tr = traceSegment(eye, dir, d3 + 2, e);
   if (tr.ent !== tgt) { ai.fireT = 0.5; return; }
   const cover = world.forestCover(tgt.pos.x, tgt.pos.z) >= 4;
-  if (cover && d3 > 150) { ai.fireT = 0.6; return; }   // oculto en el bosque
-  const usable = e.weapons.filter(w => w.cd <= 0 && e.armor[w.sec] > 0 && d3 < w.def.range);
+  const usable = e.weapons.filter(w => w.cd <= 0 && e.armor[w.sec] > 0 && d3 <= w.def.range);
   if (!usable.length) return;
   const w = usable[Math.floor(Math.random() * usable.length)];
   const spread = ((1 - ai.skill) * (d3 * 0.05 + tgt.speed * 0.25) + 0.8) * (cover ? 1.8 : 1);
