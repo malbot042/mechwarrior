@@ -15,16 +15,21 @@ También funciona tal cual en GitHub Pages.
 
 ### Flujo
 
-**Menú → hangar → misión.** En el menú eliges modo (↑↓ + Enter o teclas 1 / 2 / 3 / 4); en el hangar configuras el mech, la zona y la hora (y en batalla, el objetivo y la vista); con Enter despliegas. Al terminar, Enter te devuelve al hangar.
+**Menú → hangar → misión.** En el menú eliges modo (↑↓ + Enter o teclas 1 / 2); en el hangar configuras el mech y la misión (mapa, hora, vista y, en batalla, el objetivo); con Enter despliegas. Al terminar, Enter te devuelve al hangar.
 
 ### Modos
 
-| Modo | Vista | Descripción |
-|------|-------|-------------|
-| **[1] TÁCTICO** | Cenital | Campaña por oleadas vista desde arriba. Cámara fija a máxima apertura que se adelanta hacia donde apunta el torso. Flechas giran el torso (o el torso sigue al cursor si usas ratón); ↑↓ ajustan el alcance de la mira. |
-| **[2] CABINA** | Primera persona | Campaña por oleadas desde el interior de la cabina 3D con instrumentos. Flechas (o ratón capturado) mueven torso y mira. |
-| **[3] ENTRENAMIENTO** | Las dos (cambia con **B**) | Práctica libre para aprender los controles. Ver más abajo. |
-| **[4] BATALLA 5 VS 5** | Las dos (cambia con **B**) | Tu escuadra contra otra: asalto o defensa de un punto, con eyección y refuerzos. Ver más abajo. |
+| Modo | Descripción |
+|------|-------------|
+| **[1] ENTRENAMIENTO** | Práctica libre para aprender los controles: dianas, lecciones, sin muerte. |
+| **[2] BATALLA 5 VS 5** | Tu escuadra contra otra con cuatro objetivos: asalto, defensa, conquista y escolta de convoy. |
+
+### Vistas
+
+Las dos se eligen en el hangar (fila VISTA) y se cambian en cualquier momento con **B**.
+
+- **TÁCTICA** (cenital): cámara fija a máxima apertura que se adelanta hacia donde apunta el torso. Flechas giran el torso (o el torso sigue al cursor si usas ratón); ↑↓ ajustan el alcance de la mira.
+- **CABINA** (primera persona): interior 3D con instrumentos. Flechas (o ratón capturado) mueven torso y mira.
 
 ### Visibilidad: sólo se fija lo que se ve
 
@@ -51,19 +56,24 @@ Modo libre para practicar sin presión:
 
 ### Batalla 5 vs 5
 
-Tú (LANZA-1) y cuatro mechs aliados con IA (LANZA-2…5, en azul) contra cinco mechs enemigos (en rojo). En el hangar eliges el **objetivo**:
+Tú (LANZA-1) y cuatro mechs aliados con IA (LANZA-2…5, en azul) contra cinco mechs enemigos (en rojo). En el hangar eliges **mapa**, **hora**, **objetivo** y **vista**.
 
-| Objetivo | Tu escuadra | Ganas si… | Pierdes si… |
-|----------|-------------|-----------|-------------|
-| **ASALTO** | Ataca el punto ALFA | la captura llega al 100 % | se acaba el tiempo (6 min) o tu escuadra se queda sin refuerzos |
-| **DEFENSA** | Protege el punto ALFA | aguantas hasta el final del tiempo o el enemigo se queda sin refuerzos | el enemigo captura el punto |
+| Objetivo | Qué hay que hacer | Victoria | Derrota |
+|----------|-------------------|----------|---------|
+| **ASALTO** | Capturar el punto ALFA | la captura llega al 100 % | se acaba el tiempo (6 min) |
+| **DEFENSA** | Impedir que el enemigo capture ALFA | aguantar hasta el final (6 min) | el enemigo llega al 100 % |
+| **CONQUISTA** | Controlar los puntos ALFA, BRAVO y CHARLIE | llegar antes a 250 puntos (cada punto propio suma 1 por segundo) o tener más al acabar los 7 min | el enemigo llega antes a 250 |
+| **ESCOLTA** | Llevar 3 camiones por la ruta hasta la EXTRACCIÓN | llegan 2 camiones | se pierden 2 camiones o se acaban los 8 min |
 
-- **Punto ALFA**: zona circular marcada con postes y un haz de luz visible desde lejos. Cambia al color del atacante según avanza la captura y parpadea en naranja cuando está **disputado**.
-- **Captura**: solo avanza si hay atacantes dentro y ningún defensor (más rápido con más atacantes, hasta 3). Si hay mechs de los dos bandos, se congela; si solo hay defensores, la captura retrocede.
-- **Refuerzos**: cada equipo tiene 10. Cada mech destruido gasta uno y reaparece en su base (8 s el jugador, 10 s la IA). Sin refuerzos, los mechs caídos ya no vuelven.
-- **Eyección**: cuando tu mech cae, el piloto **sale disparado en una cápsula con paracaídas**. La cámara sigue a la cápsula (vista cenital o de persecución en cabina) hasta que reapareces en la base con un mech nuevo con tu misma configuración. **Z mantenido** (1,2 s) eyecta voluntariamente, útil si el mech está inutilizado, aunque gasta un refuerzo. Los mechs de la IA también se eyectan.
-- **IA de escuadra**: los atacantes avanzan hacia el punto disparando con el torso mientras caminan; los defensores vigilan la zona y salen a interceptar. Ambos eligen como blanco al enemigo más cercano.
-- **HUD de batalla**: objetivo y progreso de captura, tiempo, refuerzos y mechs vivos por equipo, marcador ALFA con distancia (se pega al borde de la pantalla si queda fuera), aliados con chevrón azul y en el radar.
+En todos los objetivos, además, gana quien deje al otro **sin refuerzos y sin mechs en pie**.
+
+- **Puntos de captura**: zonas circulares con postes y un haz de luz visible desde lejos. Toman el color de quien los controla y parpadean en naranja cuando están **disputados** (mechs de los dos bandos dentro: la captura se congela).
+  - *Asalto/Defensa*: la captura sólo avanza con atacantes dentro y ningún defensor (más rápido con más atacantes, hasta 3); si sólo hay defensores, retrocede.
+  - *Conquista*: cada punto tiene una barra de −100 (rojo) a +100 (azul). Con un solo bando dentro se mueve hacia ese lado; al llegar al extremo el punto pasa a ser suyo, y lo sigue siendo hasta que la barra cruza el centro (queda neutral). La IA de ambos bandos se reparte entre los puntos que no controla y a veces vigila los propios.
+- **Escolta**: los camiones (blindados, sin armas) arrancan a los 8 s, van en fila manteniendo la distancia y siguen la ruta (en la ciudad, por una calle recta; fuera, se abre un pasillo entre edificios). El enemigo embosca desde un lateral a mitad de ruta y prioriza los camiones. Tus aliados escoltan al camión de cabeza. El HUD muestra el avance de la ruta y el blindaje de cada camión; hay marcadores de **CONVOY** y **EXTRACCIÓN**.
+- **Refuerzos**: cada equipo tiene 10. Cada mech destruido gasta uno y reaparece en su base (8 s el jugador, 10 s la IA).
+- **Eyección**: cuando tu mech cae, el piloto **sale disparado en una cápsula con paracaídas**. La cámara la sigue (vista cenital o de persecución en cabina) hasta que reapareces en la base con un mech nuevo con tu misma configuración. **Z mantenido** (1,2 s) eyecta voluntariamente, aunque gasta un refuerzo. Los mechs de la IA también se eyectan.
+- **HUD de batalla**: objetivo y progreso (barra de captura, tres casillas A/B/C con marcador en conquista, o avance del convoy), tiempo, refuerzos y mechs vivos por equipo, marcadores con distancia (se pegan al borde si quedan fuera de pantalla), aliados con chevrón azul y en el radar.
 - **Puntuación**: los derribos que haces tú cuentan entero; los de la escuadra, una parte.
 
 #### Órdenes a la escuadra
@@ -72,7 +82,7 @@ Tú (LANZA-1) y cuatro mechs aliados con IA (LANZA-2…5, en azul) contra cinco 
 |-------|-------|-----------------------|
 | **1** | SEGUIDME | Forman en cuña detrás de ti, igualan tu velocidad y disparan a lo que tengan a tiro |
 | **2** | ATACAD MI BLANCO | Todos se lanzan contra tu blanco fijado (fíjalo antes con Q). Al destruirlo vuelven a libre acción |
-| **3** | TOMAD / DEFENDED EL PUNTO | Van al punto ALFA y se quedan dentro (en asalto capturan, en defensa lo bloquean) |
+| **3** | OBJETIVO | Asalto/Defensa: van al punto ALFA y se quedan dentro · Conquista: toman el punto más cercano a ti que no sea vuestro · Escolta: se pegan al convoy |
 | **4** | LIBRE ACCIÓN | Comportamiento por defecto según el objetivo de la misión |
 
 Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (bajo el radar en vista táctica, arriba a la derecha en cabina) muestra la orden activa y, por aliado, blindaje y estado (SIGUIENDO, ATACANDO, AL PUNTO, COMBATE, AVANZANDO, EYECTADO…). El blanco ordenado lleva una marca azul **ESCUADRA** en el HUD.
@@ -81,7 +91,7 @@ Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (ba
 
 | Tecla | Acción |
 |-------|--------|
-| ↑ / ↓ + Enter (o 1 / 2 / 3) | Elegir modo en el menú |
+| ↑ / ↓ + Enter (o 1 / 2) | Elegir modo en el menú |
 | W / S | Subir / bajar acelerador (marcha atrás limitada) |
 | A / D | Girar piernas |
 | ← / → | Girar torso |
@@ -95,7 +105,7 @@ Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (ba
 | V | Visión térmica on/off |
 | T | Paleta CRT: color / ámbar / fósforo verde |
 | Esc / P | Pausa (Enter continuar, H hangar, M menú) |
-| B | Entrenamiento y batalla: cambiar vista táctica / cabina |
+| B | Cambiar vista táctica / cabina |
 | 1 · 2 · 3 · 4 | Batalla: órdenes a la escuadra (seguidme · atacad mi blanco · al punto · libre) |
 | Z (mantener) | Batalla: eyección voluntaria |
 | O · N · I | Sólo entrenamiento: blancos armados · nueva diana · panel de lecciones |
@@ -106,7 +116,7 @@ Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del 
 
 ## Hangar
 
-Antes de cada misión configuras el mech y eliges zona y hora (en batalla también el objetivo y la vista inicial). Se maneja con teclado (↑↓ elegir fila, ←→ cambiar, G grupo de disparo, R restablecer, Enter desplegar, Esc menú) o haciendo clic en las flechas. Todo se guarda en el navegador.
+Antes de cada misión configuras el mech y, en el panel **MISIÓN**, el mapa, la hora, la vista inicial y (en batalla) el objetivo. Se maneja con teclado (↑↓ elegir fila, ←→ cambiar, G grupo de disparo, R restablecer, Enter desplegar, Esc menú) o haciendo clic en las flechas. Todo se guarda en el navegador.
 
 | Chasis | Clase | Tonelaje | Velocidad | Carga de armas | Monturas (LA / LT / RT / RA) |
 |--------|-------|----------|-----------|----------------|------------------------------|
@@ -131,15 +141,16 @@ Tipos de montura: **E** energía, **B** balística, **M** misiles. Cada montura 
 
 Las armas se ven en el modelo 3D (cañones, bobinas de PPC, lanzamisiles en el hombro…) y cambian al instante en el hangar. El panel muestra velocidad, blindaje, disipación, daño alfa, daño por segundo y cuánto tardas en disipar una andanada completa.
 
-## Zonas, hora del día y visión térmica
+## Mapas, hora del día y visión térmica
 
-Se eligen en el panel **MISIÓN** del hangar (filas ZONA y HORA); se pueden combinar libremente.
+Se eligen en el panel **MISIÓN** del hangar (filas MAPA y HORA); se pueden combinar libremente con cualquier objetivo.
 
-| Zona | Terreno |
+| Mapa | Terreno |
 |------|---------|
 | DESIERTO ROJO | Dunas, ruinas industriales, árboles muertos dispersos |
 | VALLE FLUVIAL | Dos ríos, lagos, arboledas de pinos y frondosos |
 | BOSQUE BOREAL | Bosque muy denso de coníferas cruzado por un río |
+| CIUDAD EN RUINAS | Cuadrícula de calles y manzanas con edificios de 8 a 38 m, plazas abiertas (donde se colocan los puntos de captura) y edificios en ruinas. Máxima cobertura: los edificios cortan la línea de visión y se pueden derribar |
 
 | Hora | Efecto |
 |------|--------|
@@ -157,8 +168,7 @@ Se eligen en el panel **MISIÓN** del hangar (filas ZONA y HORA); se pueden comb
 - **Daño por secciones**: brazos, torsos laterales, torso central y piernas. Si pierdes un brazo o un torso lateral pierdes sus armas; con las piernas dañadas vas más lento; si caen el torso central o las piernas, el mech queda destruido.
 - **Calor**: cada disparo calienta. Al llegar al 100 % el reactor se apaga 4 s (la pantalla se llena de estática). El agua y los disipadores extra ayudan.
 - **Armas**: láseres (impacto instantáneo), PPC (proyectil rápido), cañones automáticos, SRM (salva directa) y LRM (salva guiada).
-- **Enemigos** con IA (acercarse / mantener distancia / flanquear, línea de visión, cobertura del bosque): "Chacal" (ligero), "Merodeador" (medio), "Coloso" (pesado, desde la oleada 5) y tanques. Usan los mismos chasis que el jugador.
-- **Oleadas** crecientes con reparación parcial entre ellas.
+- **Enemigos** con IA (acercarse / mantener distancia / flanquear, línea de visión, cobertura del bosque): "Chacal" (ligero), "Merodeador" (medio) y "Coloso" (pesado). Usan los mismos chasis que el jugador. En entrenamiento también hay tanques.
 - **Equipos**: IA genérica por bandos; los aliados y enemigos usan los mismos chasis, eligen blanco por cercanía y respetan la línea de visión (no disparan si un compañero se interpone).
 - **Edificios destructibles** que bloquean disparos y movimiento.
 - **Cabina 3D**: marco de parabrisas, salpicadero con 3 pantallas vivas (daños, radar, armas/calor), palanca de aceleración y joystick que se mueven con tus acciones, botonera parpadeante y luces de aviso.
@@ -170,12 +180,12 @@ Se eligen en el panel **MISIÓN** del hangar (filas ZONA y HORA); se pueden comb
 ```
 index.html        importmap + arranque
 lib/              three.js r187 (vendorizado, licencia MIT)
-js/main.js        bucle, estado, entidades, armas, IA por equipos, HUD, hangar (UI), entrenamiento, batalla 5 vs 5, órdenes de escuadra, eyección, visión térmica
+js/main.js        bucle, estado, entidades, armas, IA por equipos, HUD, hangar (UI), entrenamiento, batalla 5 vs 5 (asalto, defensa, conquista, escolta), órdenes de escuadra, eyección, visión térmica
 js/data.js        catálogo de armas y chasis, cálculo de estadísticas
 js/hangar.js      escena 3D del hangar
 js/crt.js         shader CRT de post-proceso (incluye paleta térmica)
-js/world.js       zonas y horas: terreno, ríos/agua, bosques instanciados, cielo, luces, edificios
-js/models.js      modelos low-poly de mech (armas visibles según configuración) y tanque
+js/world.js       mapas y horas: terreno, ríos/agua, bosques instanciados, ciudad en cuadrícula, cielo, luces, edificios
+js/models.js      modelos low-poly de mech (armas visibles según configuración), tanque y camión de convoy
 js/cockpit.js     interior de cabina (hijo de la cámara)
 js/hud.js         dibujo 2D: radar, esquema de daños, armas, calor
 js/audio.js       efectos de sonido sintetizados
@@ -184,6 +194,6 @@ js/audio.js       efectos de sonido sintetizados
 ## Ideas para seguir
 
 - Saltos (jump jets), pantalla de mapa, órdenes individuales por aliado
-- Más objetivos: varios puntos (conquista), escolta de convoy
-- Progresión: créditos por oleada para desbloquear chasis y armas
+- Variante de escolta inversa (emboscar un convoy enemigo)
+- Progresión: créditos por batalla para desbloquear chasis y armas
 - Gamepad, ajustes de sensibilidad, intensidad del efecto CRT

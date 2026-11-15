@@ -24,6 +24,11 @@ export const ZONES = {
     rivers: [{ a: 0.35, off: -60, amp: 55, freq: 0.008, ph: 1.0, w: 10 }, { a: 1.95, off: 110, amp: 40, freq: 0.011, ph: 2.2, w: 7 }],
     forest: 0.45, treeTypes: ['pine', 'round'], low: 0x3c4a26, high: 0x7a7448, rock: 0x6a665e, sand: 0x8a7c5a, clusters: 5, rocks: 110,
   },
+  ciudad: {
+    name: 'CIUDAD EN RUINAS', desc: 'calles en cuadrícula, mucha cobertura', seed: 9001, ph: 1.2, base: 2, amp: 0.12, waterY: null, rivers: [],
+    forest: 0.05, treeTypes: ['round'], low: 0x4a4846, high: 0x6a6662, rock: 0x55524e, sand: 0x5a5754, clusters: 0, rocks: 50,
+    city: { block: 46, street: 18, radius: 330 },
+  },
   bosque: {
     name: 'BOSQUE BOREAL', desc: 'bosque denso, un río', seed: 777, ph: 4.3, base: 5, waterY: -13,
     rivers: [{ a: -0.5, off: 40, amp: 70, freq: 0.009, ph: 0.4, w: 9 }],
@@ -67,7 +72,7 @@ export function heightAt(x, z) {
         + Math.sin((x - z) * 0.0055 + p) * 12
         + Math.cos(z * 0.06 + x * 0.02) * 1.2;
   const d = Math.hypot(x, z);
-  h = h * (0.25 + 0.75 * Math.min(1, d / 120)) + Z.base;
+  h = h * (0.25 + 0.75 * Math.min(1, d / 120)) * (Z.amp ?? 1) + Z.base;
   for (const r of Z.rivers) {
     const rd = riverDist(x, z, r);
     if (rd < r.w + 70) {
@@ -82,6 +87,14 @@ export function heightAt(x, z) {
 }
 
 export const waterLevel = () => (Z.waterY ?? -Infinity);
+
+// ciudad: ¿está (x,z) sobre una calle? (las manzanas empiezan en múltiplos del paso)
+export function isStreet(x, z) {
+  if (!Z.city) return false;
+  const pitch = Z.city.block + Z.city.street;
+  const fx = ((x % pitch) + pitch) % pitch, fz = ((z % pitch) + pitch) % pitch;
+  return fx >= Z.city.block || fz >= Z.city.block;
+}
 
 // ------------------------------------------------------------------ texturas
 function facadeTexture(seed) {
@@ -211,6 +224,7 @@ export function buildWorld(scene, zoneId = 'desierto', timeId = 'dusk') {
     if (y < wy + 1.8) tmp.lerp(cSand, THREE.MathUtils.clamp((wy + 1.8 - y) / 1.5, 0, 1));
     if (y < wy - 0.5) tmp.multiplyScalar(0.6);
     const patch = Math.sin(x * 0.045 + Math.sin(z * 0.03) * 2) * Math.cos(z * 0.05 + Math.sin(x * 0.02) * 2);
+    if (Z.city && isStreet(x, z) && Math.hypot(x, z) < Z.city.radius + 40) tmp.setHex(0x2c2c2e);
     const v = 0.82 + patch * 0.16 + rand() * 0.14;
     colors[i * 3] = tmp.r * v; colors[i * 3 + 1] = tmp.g * v; colors[i * 3 + 2] = tmp.b * v;
   }
@@ -294,6 +308,44 @@ export function buildWorld(scene, zoneId = 'desierto', timeId = 'dusk') {
     }
   }
 
+  // --- ciudad: manzanas en cuadrícula con edificios y algunas plazas abiertas ---
+  const openSpots = [];
+  if (Z.city) {
+    const { block, street, radius } = Z.city;
+    const pitch = block + street;
+    const cityMats = palette.map(c => {
+      const tex = facade.clone();
+      tex.repeat.set(2, 3); tex.needsUpdate = true;
+      return new THREE.MeshLambertMaterial({ color: c, flatShading: true, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: T.windows });
+    });
+    const n = Math.ceil(radius / pitch);
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+      const bx = i * pitch + block / 2, bz = j * pitch + block / 2;    // centro de la manzana
+      const dc = Math.hypot(bx, bz);
+      if (dc > radius) continue;
+      if (rand() < 0.14 || (i === 0 && j === 0)) { openSpots.push(new THREE.Vector3(bx, heightAt(bx, bz), bz)); continue; }  // plaza
+      const parts = rand() < 0.45 ? [[0, 0, block - 6, block - 6]] :
+        [[-1, -1], [1, -1], [-1, 1], [1, 1]].filter(() => rand() < 0.8).map(([sx, sz]) => [sx * block / 4, sz * block / 4, block / 2 - 5, block / 2 - 5]);
+      for (const [ox, oz, w, d] of parts) {
+        const x = bx + ox, z = bz + oz;
+        const ruin = rand() < 0.15;
+        const h = ruin ? 4 + rand() * 5 : 8 + rand() * 30 * (1 - dc / radius * 0.6);
+        const y0 = Math.min(heightAt(x - w / 2, z - d / 2), heightAt(x + w / 2, z + d / 2), heightAt(x, z)) - 1.5;
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), cityMats[Math.floor(rand() * cityMats.length)]);
+        m.position.set(x, y0 + h / 2, z);
+        m.castShadow = true; m.receiveShadow = true;
+        m.userData.heat = ruin ? HEAT.ruin * 0.8 : HEAT.building;
+        root.add(m);
+        if (!ruin && rand() < 0.5) {
+          const r = new THREE.Mesh(new THREE.BoxGeometry(w * 0.35, 2.5, d * 0.35), rockMat);
+          r.position.set((rand() - 0.5) * w * 0.3, h / 2 + 1.25, (rand() - 0.5) * d * 0.3);
+          m.add(r);
+        }
+        obstacles.push({ mesh: m, box: new THREE.Box3().setFromObject(m), cx: x, cz: z, hp: 20 + w * d * h * 0.012, alive: true, h, y0, shared: true });
+      }
+    }
+  }
+
   // --- árboles (instanciados, se pueden derribar) ---
   const TG = treeGeometries();
   const trees = [];               // {x,y,z,s,ry,type,fi,fallen,t,dx,dz}
@@ -307,6 +359,7 @@ export function buildWorld(scene, zoneId = 'desierto', timeId = 'dusk') {
         const dens = THREE.MathUtils.clamp((forestN(x, z) - (1.15 - Z.forest * 2)) * 1.4, 0, 0.85);
         if (rand() > dens) continue;
         if (Math.hypot(x, z) < 28) continue;
+        if (Z.city && (isStreet(x, z) || Math.hypot(x, z) < Z.city.radius)) continue;
         const y = heightAt(x, z);
         if (y < wy + 0.8 || y > 40) continue;
         if (obstacles.some(o => x > o.box.min.x - 3 && x < o.box.max.x + 3 && z > o.box.min.z - 3 && z < o.box.max.z + 3)) continue;
@@ -383,7 +436,7 @@ export function buildWorld(scene, zoneId = 'desierto', timeId = 'dusk') {
 
   return {
     zone: zoneId, time: timeId, Z, T,
-    terrain, obstacles, sky, sun, water, trees,
+    terrain, obstacles, sky, sun, water, trees, openSpots,
     headlights: !!T.headlights,
     trample, forestCover,
     // vista táctica: la niebla se desplaza con la altura de la cámara (se sigue

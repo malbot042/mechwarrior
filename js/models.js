@@ -229,3 +229,22 @@ export function buildTank(colors = {}) {
   turret.add(muzzle);
   return { root, turret, meshes, mats: [base, dark, accent], muzzles: { main: muzzle }, sections: {} };
 }
+
+// Vehículo de convoy: cabina + caja de carga sobre seis ruedas
+export function buildTruck(colors = {}) {
+  const base = new THREE.MeshLambertMaterial({ color: colors.base ?? 0x56667c, flatShading: true });
+  const dark = new THREE.MeshLambertMaterial({ color: colors.dark ?? 0x1e2226, flatShading: true });
+  const accent = new THREE.MeshLambertMaterial({ color: colors.accent ?? 0xd8d0b0, flatShading: true });
+  const meshes = [];
+  const add = adder(meshes);
+  const root = new THREE.Group();
+  add(root, B(3.4, 0.6, 9.0), dark, 0, 1.2, 0);
+  add(root, B(3.2, 2.4, 2.6), base, 0, 2.6, -3.2);            // cabina
+  add(root, B(2.6, 0.8, 0.1), new THREE.MeshBasicMaterial({ color: 0x60c0ff }), 0, 3.2, -4.52);
+  add(root, B(3.4, 3.0, 5.6), accent, 0, 3.0, 1.4);           // carga
+  add(root, B(3.5, 0.4, 5.7), base, 0, 4.6, 1.4);
+  for (const z of [-3.2, 0.4, 3.0]) for (const s of [-1, 1]) add(root, B(0.6, 1.3, 1.3), dark, s * 1.75, 0.65, z);
+  const turret = new THREE.Group();                            // sin torreta (compatibilidad)
+  root.add(turret);
+  return { root, turret, meshes, mats: [base, dark, accent], muzzles: {}, sections: {} };
+}

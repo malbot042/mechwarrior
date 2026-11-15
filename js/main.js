@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { createCRT } from './crt.js';
 import { buildWorld, heightAt, BOUND, waterLevel, ZONES, TIMES, HEAT } from './world.js';
-import { buildMech, buildTank, animateMech } from './models.js';
+import { buildMech, buildTank, buildTruck, animateMech } from './models.js';
 import { buildCockpit } from './cockpit.js';
 import { buildHangar } from './hangar.js';
 import { WEAPONS, CHASSIS, MOUNTS, MOUNT_NAME, SLOT_NAME, HEATSINK_PER_TON, chassisById, optionsFor, usedTons, stats, defaultConfig, defaultGroup } from './data.js';
@@ -196,32 +196,13 @@ function placeFree(e, x, z) {
   e.pos.y = heightAt(e.pos.x, e.pos.z);
 }
 
-function spawnWave() {
-  state.wave++;
-  const n = state.wave;
-  const mechs = Math.min(1 + Math.floor((n - 1) / 2), 5);
-  const mediums = Math.min(Math.floor((n - 1) / 3), 3);
-  const heavies = n >= 5 ? Math.min(Math.floor((n - 3) / 3), 2) : 0;
-  const tanks = Math.min(1 + n, 7);
-  const base = Math.random() * Math.PI * 2;
-  const list = [];
-  for (let i = 0; i < mechs; i++) list.push(enemyMech(i < heavies ? 'heavy' : i < heavies + mediums ? 'medium' : 'light'));
-  for (let i = 0; i < tanks; i++) list.push(createTank({ armor: 18 + n * 2 }));
-  list.forEach((e, i) => {
-    const a = base + (i / list.length - 0.5) * 1.6 + (Math.random() - 0.5) * 0.3;
-    const r = 230 + Math.random() * 60;
-    placeFree(e, player.pos.x + Math.sin(a) * r, player.pos.z + Math.cos(a) * r);
-    e.heading = yawTo(e.pos, player.pos);
-    entities.push(e);
-  });
-  msg(`OLEADA ${n} — CONTACTOS: ${list.length}`, C.warn, 4);
-  sfx.beep(1, 660); setTimeout(() => sfx.beep(1, 880), 140);
-}
-
 function clearWorld() {
   for (const p of pods) scene.remove(p.mesh);
   pods.length = 0;
-  if (state.battle?.beacon) scene.remove(state.battle.beacon.group);
+  if (state.battle) {
+    for (const p of state.battle.points || []) scene.remove(p.beacon.group);
+    if (state.battle.extractBeacon) scene.remove(state.battle.extractBeacon.group);
+  }
   state.battle = null; state.ejected = false; state.ejectHold = 0;
   if (state.headlight) { scene.remove(state.headlight, state.headlight.target); state.headlight.dispose(); state.headlight = null; }
   for (const e of entities) scene.remove(e.model.root);
@@ -234,7 +215,7 @@ function startGame(mode) {
   sfx.powerup();
   clearWorld();
   state.mode = mode;
-  state.wave = 0; state.score = 0; state.kills = 0; state.msgs = []; state.waveTimer = 0;
+  state.score = 0; state.kills = 0; state.msgs = [];
   state.target = null; state.hitDirs = [];
   ensureWorld(hangar.zone, hangar.time);
   player = newPlayer();
@@ -253,9 +234,7 @@ function startGame(mode) {
   if (world.time === 'night') setTimeout(() => msg('VISIBILIDAD NOCTURNA — PULSE V PARA VISIÓN TÉRMICA', C.warn, 5), 1200);
   state.battle = null;
   if (state.training) startTraining();
-  else if (state.battleMode) startBattle();
-  else spawnWave();
-  if (!state.training && !state.battleMode) msg(mode === 'top' ? 'MODO TÁCTICO — FLECHAS APUNTAR · Q BLANCO' : 'MODO CABINA — FLECHAS APUNTAR · Q BLANCO', C.cyan, 4);
+  else startBattle();
   state.track = false; state.aimDist = 120;
 }
 
@@ -323,7 +302,7 @@ function hitSection(e, p) {
 }
 
 function damage(e, amount, point, src) {
-  if (!e.alive) return;
+  if (!e.alive || e.arrived) return;
   if (src) e.lastHitBy = src;
   const sec = hitSection(e, point);
   const before = e.armor[sec];
@@ -362,6 +341,7 @@ function damageObs(o, amount, point) {
   if (o.hp <= 0) {
     o.alive = false;
     const m = o.mesh;
+    if (o.shared) { m.material = m.material.clone(); o.shared = false; }   // material propio antes de oscurecerlo
     m.scale.y = 0.25;
     m.position.y = o.y0 + o.h * 0.125;
     m.material.emissiveIntensity = 0;
@@ -394,6 +374,9 @@ function kill(e) {
     document.exitPointerLock?.();
     cockpit.group.visible = false;
     player.model.root.visible = true;
+  } else if (state.battleMode && e.kind === 'convoy') {
+    msg(`¡${e.name} DEL CONVOY DESTRUIDO!`, C.bad, 3);
+    sfx.beep(0.8, 300);
   } else if (state.battleMode && e.team === 'A') {
     if (state.target === e) state.target = null;
     msg(`${e.name} DERRIBADO — PILOTO EYECTADO`, C.ally, 2.5);
@@ -779,7 +762,7 @@ function updateAI(e, dt) {
     let best = null, bd = ai.sense ?? Infinity;
     for (const o of entities) {
       if (!o.alive || !hostile(e, o)) continue;
-      const d = Math.hypot(o.pos.x - e.pos.x, o.pos.z - e.pos.z) * (o.isPlayer ? 0.85 : 1);
+      const d = Math.hypot(o.pos.x - e.pos.x, o.pos.z - e.pos.z) * (o.kind === 'convoy' ? 0.55 : o.isPlayer ? 0.85 : 1);
       if (d < bd) { bd = d; best = o; }
     }
     ai.target = best;
@@ -787,7 +770,7 @@ function updateAI(e, dt) {
   const tgt = ai.target;
   let desired = e.heading;
   e.throttle = 0;
-  const goal = ai.goal;
+  const goal = ordType === 'point' && ord.point ? ord.point.pos : ai.goal;
   const dGoal = goal ? Math.hypot(goal.x - e.pos.x, goal.z - e.pos.z) : 0;
   const dT = tgt ? Math.hypot(tgt.pos.x - e.pos.x, tgt.pos.z - e.pos.z) : Infinity;
   const R = state.battle ? state.battle.radius : 0;
@@ -804,8 +787,8 @@ function updateAI(e, dt) {
     else { desired = toYaw + Math.PI / 2 * ai.strafe; e.throttle = 0.75; }
     ai.status = 'ATACANDO';
   } else if (ordType === 'point' && goal) {
-    if (dGoal > R * 0.5) { desired = yawTo(e.pos, goal); e.throttle = 1; ai.status = 'AL PUNTO'; }
-    else { desired = yawTo(e.pos, goal) + Math.PI / 2 * ai.strafe; e.throttle = 0.35; ai.status = 'EN EL PUNTO'; }
+    if (dGoal > (state.battle.mode === 'escort' ? 28 : R * 0.5)) { desired = yawTo(e.pos, goal); e.throttle = 1; ai.status = state.battle.mode === 'escort' ? 'AL CONVOY' : 'AL PUNTO'; }
+    else { desired = yawTo(e.pos, goal) + Math.PI / 2 * ai.strafe; e.throttle = 0.35; ai.status = state.battle.mode === 'escort' ? 'ESCOLTANDO' : 'EN EL PUNTO'; }
   } else if (goal && ai.role === 'attack' && dGoal > R * 0.6) {
     desired = yawTo(e.pos, goal); e.throttle = 1;                   // avanzar hacia el punto
     ai.status = 'AVANZANDO';
@@ -976,9 +959,13 @@ function radarBlips() {
   for (const e of entities) {
     if (!e.alive || e === player) continue;
     const ally = !hostile(e, player);
-    list.push({ x: e.pos.x, z: e.pos.z, type: e.kind, targeted: e === state.target, color: ally ? C.ally : isVisible(e) ? undefined : 'rgba(255,90,64,0.35)' });
+    list.push({ x: e.pos.x, z: e.pos.z, type: e.kind === 'convoy' ? 'tank' : e.kind, targeted: e === state.target, color: e.kind === 'convoy' ? C.white : ally ? C.ally : isVisible(e) ? undefined : 'rgba(255,90,64,0.35)' });
   }
-  if (state.battleMode && state.battle) list.push({ x: state.battle.point.x, z: state.battle.point.z, type: 'obj', r: state.battle.radius, color: C.white });
+  const b = state.battleMode && state.battle;
+  if (b) {
+    for (const p of b.points) list.push({ x: p.pos.x, z: p.pos.z, type: 'obj', r: BATTLE.radius, color: p.contested ? C.warn : cssOwner(b.mode === 'conquest' ? p.owner : p.prog > 0 ? b.attackers : null) });
+    if (b.extract) list.push({ x: b.extract.x, z: b.extract.z, type: 'obj', r: 20, color: '#40ff80' });
+  }
   return list;
 }
 
@@ -1060,7 +1047,7 @@ function drawTopHud() {
   g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(mx, my); g.stroke();
 
   // paneles
-  txt(g, state.training ? 'ENTRENAMIENTO' : state.battleMode ? 'BATALLA 5 VS 5' : `OLEADA ${state.wave}`, 12, 20, { size: 13, color: state.training ? C.cyan : C.main });
+  txt(g, state.training ? 'ENTRENAMIENTO' : `BATALLA · ${OBJ_NAME[state.battle?.mode] ?? ''}`, 12, 20, { size: 13, color: state.training ? C.cyan : C.main });
   txt(g, `PUNTOS ${String(state.score).padStart(6, '0')}`, 12, 36, { size: 11 });
   txt(g, `HOSTILES ${entities.filter(e => e.alive && hostile(e, player)).length}`, 12, 50, { size: 11, color: C.enemy });
   if (state.track) txt(g, 'SEGUIMIENTO DE BLANCO [R]', 12, 66, { size: 10, color: C.cyan });
@@ -1181,7 +1168,7 @@ function drawCockpitHud() {
   txt(g, `${Math.round(p.heat)}`, rx + 5, byy + bh + 14, { size: 11, align: 'center', color: p.heat > 80 ? C.bad : C.main });
   txt(g, 'CALOR', rx + 5, byy + bh + 24, { size: 8, align: 'center', color: C.dim, glow: 0 });
 
-  txt(g, `${state.training ? 'ENTRENAMIENTO' : state.battleMode ? 'BATALLA' : 'OLEADA ' + state.wave}  ·  ${String(state.score).padStart(6, '0')}`, VW * 0.17 - 8, 22, { size: 10 });
+  txt(g, `${state.training ? 'ENTRENAMIENTO' : OBJ_NAME[state.battle?.mode] ?? 'BATALLA'}  ·  ${String(state.score).padStart(6, '0')}`, VW * 0.17 - 8, 22, { size: 10 });
   txt(g, `HOSTILES ${entities.filter(e => e.alive && hostile(e, player)).length}`, VW * 0.83 + 8, 22, { size: 10, align: 'right', color: C.enemy });
 
   // indicadores de impacto (direccional)
@@ -1239,20 +1226,18 @@ function drawMenu() {
   txt(g, 'STEEL HORIZON', cx, 110, { size: 46, align: 'center', glow: 18 });
   txt(g, 'SIMULADOR DE COMBATE MECH  ·  CLASE BATTLETECH', cx, 136, { size: 12, align: 'center', color: C.warn });
   const opts = [
-    ['1', 'MODO TÁCTICO', 'vista cenital · campaña por oleadas'],
-    ['2', 'MODO CABINA', 'primera persona · campaña por oleadas'],
-    ['3', 'ENTRENAMIENTO', 'práctica libre · dianas · lecciones · B cambia de vista'],
-    ['4', 'BATALLA 5 VS 5', 'asalto o defensa de un punto · escuadra aliada · eyección'],
+    ['1', 'ENTRENAMIENTO', 'práctica libre · dianas · lecciones de control'],
+    ['2', 'BATALLA 5 VS 5', 'asalto · defensa · conquista · escolta de convoy'],
   ];
   menuRects = [];
   opts.forEach(([k, a, b], i) => {
-    const y = 152 + i * 49, w = 420, x = cx - w / 2;
+    const y = 182 + i * 70, w = 420, x = cx - w / 2;
     const hover = state.menuSel === i;
-    frame(g, x, y, w, 42, hover ? C.main : C.dim);
-    if (hover) { g.fillStyle = 'rgba(134,255,156,0.08)'; g.fillRect(x, y, w, 42); }
-    txt(g, `[${k}] ${a}`, x + 16, y + 19, { size: 15, color: i === 2 ? C.cyan : i === 3 ? C.warn : C.main });
-    txt(g, b, x + 16, y + 34, { size: 10, color: C.dim, glow: 0 });
-    menuRects.push({ x, y, w, h: 42, sel: i });
+    frame(g, x, y, w, 54, hover ? C.main : C.dim);
+    if (hover) { g.fillStyle = 'rgba(134,255,156,0.08)'; g.fillRect(x, y, w, 54); }
+    txt(g, `[${k}] ${a}`, x + 16, y + 24, { size: 17, color: i === 0 ? C.cyan : C.warn });
+    txt(g, b, x + 16, y + 42, { size: 10, color: C.dim, glow: 0 });
+    menuRects.push({ x, y, w, h: 54, sel: i });
   });
   const lines = [
     'W/S ACELERADOR · A/D GIRAR PIERNAS · X PARAR · C CENTRAR TORSO',
@@ -1262,7 +1247,7 @@ function drawMenu() {
     'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA',
   ];
   lines.forEach((l, i) => txt(g, l, cx, 358 + i * 15, { size: 10, align: 'center', color: C.main, glow: 2 }));
-  if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2 / 3 / 4', cx, 442, { size: 12, align: 'center', color: C.white });
+  if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2', cx, 442, { size: 12, align: 'center', color: C.white });
   txt(g, `PALETA: ${['COLOR', 'ÁMBAR', 'FÓSFORO VERDE'][state.palette]}`, 10, VH - 10, { size: 9, color: C.dim, glow: 0 });
 }
 let menuRects = [];
@@ -1289,20 +1274,29 @@ function drawHud() {
   if (state.screen === 'result') drawResult();
   if (state.screen === 'dead') {
     g.fillStyle = 'rgba(30,0,0,0.35)'; g.fillRect(0, 0, VW, VH);
-    txt(g, `OLEADA ${state.wave} · ${state.kills} DERRIBOS · ${state.score} PUNTOS`, VW / 2, VH / 2 + 30, { size: 13, align: 'center', color: C.white });
+    txt(g, `${state.kills} DERRIBOS · ${state.score} PUNTOS`, VW / 2, VH / 2 + 30, { size: 13, align: 'center', color: C.white });
     txt(g, 'ENTER HANGAR  ·  M MENÚ PRINCIPAL', VW / 2, VH / 2 + 52, { size: 11, align: 'center', color: C.dim });
   }
 }
 
 // ---------------------------------------------------------------- batalla 5 vs 5
-// Dos escuadras de 5 mechs. Asalto: tu equipo debe capturar el punto ALFA.
-// Defensa: debe impedirlo hasta que acabe el tiempo. Refuerzos limitados
-// (tickets); al ser destruido el piloto se eyecta y reaparece en su base.
+// Dos escuadras de 5 mechs con refuerzos limitados; al caer, el piloto se
+// eyecta y reaparece en su base. Cuatro objetivos:
+//   ASALTO    — tu escuadra captura el punto ALFA
+//   DEFENSA   — tu escuadra impide que el enemigo lo capture
+//   CONQUISTA — tres puntos (ALFA, BRAVO, CHARLIE); cada punto propio suma
+//               puntuación; gana quien llegue antes a la meta
+//   ESCOLTA   — tres camiones deben llegar a la extracción; el enemigo embosca
 const ALLY_COLORS = { base: 0x56667c, dark: 0x20252c, accent: 0x3a80d0, glass: 0x60c0ff };
 const ROSTER = { A: ['medium', 'light', 'heavy', 'medium'], B: ['light', 'medium', 'heavy', 'medium', 'light'] };
-const BATTLE = { radius: 32, time: 360, tickets: 10, respawnAI: 10, respawnPlayer: 8 };
+const BATTLE = { radius: 32, tickets: 10, respawnAI: 10, respawnPlayer: 8, conquestGoal: 250 };
+const OBJ_TIME = { assault: 360, defense: 360, conquest: 420, escort: 480 };
+const OBJECTIVES = ['assault', 'defense', 'conquest', 'escort'];
+const OBJ_NAME = { assault: 'ASALTO', defense: 'DEFENSA', conquest: 'CONQUISTA', escort: 'ESCOLTA' };
+const POINT_NAMES = ['ALFA', 'BRAVO', 'CHARLIE'];
 const other = (t) => (t === 'A' ? 'B' : 'A');
 const pods = [];
+const lim = (v) => { v.x = clamp(v.x, -BOUND + 30, BOUND - 30); v.z = clamp(v.z, -BOUND + 30, BOUND - 30); return v; };
 
 function battleMech(type, team, idx) {
   const t = ENEMY_TYPES[type];
@@ -1313,30 +1307,60 @@ function battleMech(type, team, idx) {
   });
   e.btype = type;
   if (team === 'A') e.slot = (idx - 2) % 4;
-  const b = state.battle;
-  e.ai.goal = b.point;
-  e.ai.role = team === b.attackers ? 'attack' : 'defend';
-  e.ai.leash = 40 + Math.random() * 50;
   e.ai.sense = 420;
+  assignRole(e);
   return e;
+}
+
+// papel de la IA según el objetivo
+function assignRole(e) {
+  const b = state.battle, ai = e.ai;
+  if (b.mode === 'assault' || b.mode === 'defense') {
+    ai.goal = b.points[0].pos;
+    ai.role = e.team === b.attackers ? 'attack' : 'defend';
+    ai.leash = 40 + Math.random() * 50;
+  } else if (b.mode === 'conquest') {
+    ai.role = 'attack';
+    chooseConquestGoal(e);
+  } else {                                   // escolta
+    const lead = convoyLead();
+    ai.goal = lead ? lead.pos : b.extract;
+    ai.role = 'defend';
+    ai.leash = e.team === 'A' ? 30 + Math.random() * 15 : 90 + Math.random() * 50;
+  }
+}
+
+function chooseConquestGoal(e) {
+  const b = state.battle;
+  const mine = (p) => p.owner === e.team && !p.contested;
+  let cands = b.points.filter(p => !mine(p));
+  if (!cands.length || Math.random() < 0.2) cands = b.points;           // a veces vigila uno propio
+  let best = cands[0], bs = Infinity;
+  for (const p of cands) {
+    const d = Math.hypot(p.pos.x - e.pos.x, p.pos.z - e.pos.z) + Math.random() * 140;
+    if (d < bs) { bs = d; best = p; }
+  }
+  e.ai.goal = best.pos; e.ai.goalPoint = best;
+  e.ai.goalT = 8 + Math.random() * 8;
 }
 
 function spawnAtBase(e, team) {
   const base = state.battle.base[team];
   placeFree(e, base.x + (Math.random() - 0.5) * 50, base.z + (Math.random() - 0.5) * 50);
-  e.heading = yawTo(e.pos, state.battle.point);
+  e.heading = yawTo(e.pos, state.battle.focus);
   entities.push(e);
   moveEntity(e, 0.016);
+  if (e.ai) assignRole(e);
   return e;
 }
 
-function buildBeacon(p, r) {
+function buildBeacon(p, r, posts = 28) {
   const group = new THREE.Group();
   group.userData.keep = true;
   const capMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const postMat = new THREE.MeshLambertMaterial({ color: 0x2a2a28, flatShading: true });
-  for (let i = 0; i < 28; i++) {
-    const a = i / 28 * Math.PI * 2;
+  for (let i = 0; i < posts; i++) {
+    const a = i / posts * Math.PI * 2;
     const x = p.x + Math.sin(a) * r, z = p.z + Math.cos(a) * r, y = heightAt(x, z);
     const post = new THREE.Mesh(boxGeo, postMat);
     post.scale.set(0.5, 2.6, 0.5); post.position.set(x, y + 1.3, z);
@@ -1352,23 +1376,147 @@ function buildBeacon(p, r) {
   return { group, capMat, beamMat };
 }
 
-function startBattle() {
-  const att = hangar.objective === 'assault' ? 'A' : 'B';
-  const b = state.battle = {
-    attackers: att, radius: BATTLE.radius, capture: 0, timer: BATTLE.time,
-    tickets: { A: BATTLE.tickets, B: BATTLE.tickets }, respawns: [], over: false,
-    milestone: 0, contested: false, wasContested: false, inside: { A: 0, B: 0 },
-    deaths: 0, counter: { A: 5, B: 5 }, order: { type: 'free' },
-  };
-  // punto ALFA cerca del centro, en seco y libre de edificios
+// punto libre (seco y sin edificios); en la ciudad, la plaza más cercana
+function findSpot(x, z, used = []) {
+  const spots = world.openSpots.filter(s => !used.some(u => u.distanceTo(s) < 60));
+  if (spots.length) {
+    let best = spots[0], bd = Infinity;
+    for (const s of spots) { const d = Math.hypot(s.x - x, s.z - z); if (d < bd) { bd = d; best = s; } }
+    return best.clone();
+  }
   const tmp = { radius: 14, pos: V() };
-  placeFree(tmp, (Math.random() - 0.5) * 140, (Math.random() - 0.5) * 140);
-  b.point = tmp.pos.clone();
+  placeFree(tmp, x, z);
+  return tmp.pos.clone();
+}
+
+function makePoint(name, pos) {
+  return { name, pos, prog: 0, owner: null, contested: false, inside: { A: 0, B: 0 }, beacon: buildBeacon(pos, BATTLE.radius), milestone: 0 };
+}
+
+// ---- convoy
+function createConvoyTruck(i) {
+  const model = buildTruck();
+  scene.add(model.root);
+  return {
+    kind: 'convoy', name: `CAMIÓN-${i + 1}`, model, isPlayer: false, team: 'A',
+    pos: V(), heading: 0, torsoYaw: 0, pitch: 0, throttle: 0, speed: 0,
+    maxSpeed: 6.5, baseSpeed: 6.5, turnRate: 0.8, heat: 0, dissip: 10,
+    armor: { CT: 80 }, maxArmor: { CT: 80 }, weapons: [], alive: true,
+    radius: 4, centerH: 2.6, hitR: 4.2, shutdown: 0, deadT: 0, ai: null, value: 0,
+    wp: 1, arrived: false, stuck: 0,
+  };
+}
+const convoyLead = () => {
+  const b = state.battle;
+  return b && b.convoy ? b.convoy.filter(c => c.alive && !c.arrived).sort((a, c) => c.wp - a.wp)[0] : null;
+};
+function routeProgress(t) {
+  const r = state.battle.route;
+  let d = 0;
+  for (let i = 1; i < t.wp && i < r.length; i++) d += r[i].distanceTo(r[i - 1]);
+  if (t.wp < r.length) d += Math.max(0, r[t.wp].distanceTo(r[t.wp - 1]) - Math.hypot(r[t.wp].x - t.pos.x, r[t.wp].z - t.pos.z));
+  return t.arrived ? state.battle.routeLen : d;
+}
+// abre un pasillo para el convoy (fuera de la ciudad, las calles ya están libres)
+function clearCorridor(route, w) {
+  for (const o of world.obstacles) {
+    if (!o.alive) continue;
+    const half = Math.max(o.box.max.x - o.box.min.x, o.box.max.z - o.box.min.z) / 2;
+    for (let i = 1; i < route.length; i++) {
+      const a = route[i - 1], c = route[i];
+      const ab = _v1.copy(c).sub(a).setY(0), ap = _v2.set(o.cx - a.x, 0, o.cz - a.z);
+      const t = clamp(ap.dot(ab) / ab.lengthSq(), 0, 1);
+      const d = Math.hypot(o.cx - (a.x + ab.x * t), o.cz - (a.z + ab.z * t));
+      if (d < w + half) { o.alive = false; o.mesh.visible = false; break; }
+    }
+  }
+}
+function updateConvoy(dt) {
+  const b = state.battle;
+  b.convoyDelay -= dt;
+  for (let i = 0; i < b.convoy.length; i++) {
+    const t = b.convoy[i];
+    if (!t.alive || t.arrived) { t.throttle = 0; continue; }
+    if (b.convoyDelay > 0) { t.throttle = 0; continue; }
+    const target = b.route[t.wp];
+    if (Math.hypot(target.x - t.pos.x, target.z - t.pos.z) < 9) {
+      t.wp++;
+      if (t.wp >= b.route.length) {
+        t.arrived = true; t.throttle = 0; b.arrived++;
+        msg(`${t.name} EN LA EXTRACCIÓN (${b.arrived}/3)`, C.ally, 3); sfx.beep(0.8, 1320);
+        continue;
+      }
+    }
+    const goal = b.route[t.wp];
+    t.heading = wrap(t.heading + clamp(wrap(yawTo(t.pos, goal) - t.heading), -t.turnRate * dt, t.turnRate * dt));
+    // mantener la distancia con el camión de delante
+    const ahead = b.convoy.slice(0, i).reverse().find(c => c.alive && !c.arrived);
+    t.throttle = ahead && Math.hypot(ahead.pos.x - t.pos.x, ahead.pos.z - t.pos.z) < 15 ? 0.15 : 1;
+    if ((t.realSpeed ?? 1) < 0.4 && t.throttle > 0.5) t.stuck += dt; else t.stuck = 0;
+    if (t.stuck > 2.5) { t.heading += (Math.random() - 0.5) * 1.5; t.stuck = 0; }
+  }
+  const lead = convoyLead();
+  b.progress = Math.max(0, ...b.convoy.filter(c => c.alive || c.arrived).map(routeProgress)) / b.routeLen;
+  if (lead) for (const e of entities) if (e.alive && e.ai) e.ai.goal = lead.pos;
+}
+
+// ---- inicio
+function startBattle() {
+  const mode = hangar.objective;
+  const b = state.battle = {
+    mode, attackers: mode === 'defense' ? 'B' : 'A', radius: BATTLE.radius, timer: OBJ_TIME[mode],
+    tickets: { A: BATTLE.tickets, B: BATTLE.tickets }, respawns: [], over: false,
+    counter: { A: 5, B: 5 }, order: { type: 'free' }, points: [], score: { A: 0, B: 0 },
+  };
   const a = Math.random() * Math.PI * 2;
-  const dir = V().set(Math.sin(a), 0, Math.cos(a));
-  const lim = (v) => { v.x = clamp(v.x, -BOUND + 30, BOUND - 30); v.z = clamp(v.z, -BOUND + 30, BOUND - 30); return v; };
-  b.base = { [att]: lim(b.point.clone().addScaledVector(dir, 290)), [other(att)]: lim(b.point.clone().addScaledVector(dir, -95)) };
-  b.beacon = buildBeacon(b.point, b.radius);
+  const dir = V().set(Math.sin(a), 0, Math.cos(a)), perp = V().set(dir.z, 0, -dir.x);
+  if (mode === 'assault' || mode === 'defense') {
+    const p = findSpot((Math.random() - 0.5) * 140, (Math.random() - 0.5) * 140);
+    b.points.push(makePoint('ALFA', p));
+    b.focus = p;
+    b.base = { [b.attackers]: lim(p.clone().addScaledVector(dir, 290)), [other(b.attackers)]: lim(p.clone().addScaledVector(dir, -95)) };
+  } else if (mode === 'conquest') {
+    const c = findSpot((Math.random() - 0.5) * 60, (Math.random() - 0.5) * 60);
+    const used = [c];
+    const p1 = findSpot(...[c.clone().addScaledVector(dir, 190).addScaledVector(perp, 50)].map(v => lim(v)).flatMap(v => [v.x, v.z]), used); used.push(p1);
+    const p2 = findSpot(...[c.clone().addScaledVector(dir, -190).addScaledVector(perp, -50)].map(v => lim(v)).flatMap(v => [v.x, v.z]), used);
+    [p1, c, p2].forEach((p, i) => b.points.push(makePoint(POINT_NAMES[i], p)));
+    b.focus = c;
+    b.base = { A: lim(c.clone().addScaledVector(perp, -300)), B: lim(c.clone().addScaledVector(perp, 300)) };
+  } else {
+    // ruta del convoy: en la ciudad, por una calle recta; fuera, una línea quebrada
+    let route;
+    if (world.Z.city) {
+      const pitch = world.Z.city.block + world.Z.city.street;
+      const sz = world.Z.city.block + world.Z.city.street / 2;
+      const horiz = Math.random() < 0.5, sg = Math.random() < 0.5 ? 1 : -1;
+      route = [-320, -110, 110, 320].map(u => horiz ? V().set(u * sg, 0, sz) : V().set(sz - pitch, 0, u * sg));
+    } else {
+      const S = dir.clone().multiplyScalar(-310), E = dir.clone().multiplyScalar(310);
+      route = [S, S.clone().lerp(E, 0.33).addScaledVector(perp, 60), S.clone().lerp(E, 0.66).addScaledVector(perp, -60), E].map(lim);
+      clearCorridor(route, 10);
+    }
+    route.forEach(p => { p.y = heightAt(p.x, p.z); });
+    b.route = route;
+    b.routeLen = route.reduce((s, p, i) => s + (i ? p.distanceTo(route[i - 1]) : 0), 0);
+    b.extract = route[route.length - 1].clone();
+    b.extractBeacon = buildBeacon(b.extract, 20, 18);
+    b.extractBeacon.capMat.color.setHex(0x40ff80); b.extractBeacon.beamMat.color.setHex(0x40ff80);
+    b.focus = route[1];
+    b.convoy = []; b.arrived = 0; b.progress = 0; b.convoyDelay = 8;
+    const d0 = route[1].clone().sub(route[0]).setY(0).normalize();
+    for (let i = 0; i < 3; i++) {
+      const t = createConvoyTruck(i);
+      t.pos.copy(route[0]).addScaledVector(d0, -i * 16);
+      t.pos.y = heightAt(t.pos.x, t.pos.z);
+      t.heading = yawTo(t.pos, route[1]);
+      entities.push(t); moveEntity(t, 0.016);
+      b.convoy.push(t);
+    }
+    const amb = route[0].clone().lerp(route[route.length - 1], 0.6);
+    const side = world.Z.city ? V().set(d0.z, 0, -d0.x) : perp;
+    b.base = { A: lim(route[0].clone().addScaledVector(d0, -45)), B: lim(amb.addScaledVector(side, 170)) };
+  }
   // escuadras
   player.name = 'LANZA-1';
   entities.splice(entities.indexOf(player), 1);
@@ -1376,10 +1524,15 @@ function startBattle() {
   ROSTER.A.forEach((t, i) => spawnAtBase(battleMech(t, 'A', i + 2), 'A'));
   ROSTER.B.forEach((t, i) => spawnAtBase(battleMech(t, 'B', i + 1), 'B'));
   state.ejected = false; state.ejectHold = 0; state.deaths = 0;
-  msg(att === 'A' ? 'ASALTO — CAPTURAD EL PUNTO ALFA' : 'DEFENSA — PROTEGED EL PUNTO ALFA', C.warn, 5);
+  const intro = {
+    assault: 'ASALTO — CAPTURAD EL PUNTO ALFA', defense: 'DEFENSA — PROTEGED EL PUNTO ALFA',
+    conquest: `CONQUISTA — CONTROLAD LOS PUNTOS · META ${BATTLE.conquestGoal}`, escort: 'ESCOLTA — LLEVAD EL CONVOY A LA EXTRACCIÓN',
+  }[mode];
+  msg(intro, C.warn, 5);
   msg('1-4 ÓRDENES A LA ESCUADRA · Z MANTENIDO: EYECCIÓN · B VISTA', C.dim, 6);
 }
 
+// ---- eyección
 function eject(e, isPlayer) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(boxGeo, new THREE.MeshLambertMaterial({ color: 0x8a8a80, flatShading: true }));
@@ -1439,33 +1592,90 @@ function respawnPlayer() {
   msg('NUEVO MECH DESPLEGADO EN LA BASE', C.cyan, 3);
 }
 
+// ---- actualización
+const ownerColor = (t) => (t === 'A' ? 0x4090ff : t === 'B' ? 0xff4020 : 0xffffff);
+function paintBeacon(p, col) {
+  if (p.contested && Math.sin(state.time * 10) > 0) col.setHex(0xffb020);
+  p.beacon.capMat.color.copy(col);
+  p.beacon.beamMat.color.copy(col);
+  p.beacon.beamMat.opacity = 0.22 + 0.1 * Math.sin(state.time * 3);
+}
+function countInside(p) {
+  const ins = { A: 0, B: 0 };
+  for (const e of entities) if (e.alive && e.kind !== 'convoy' && Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z) < BATTLE.radius) ins[e.team]++;
+  p.inside = ins;
+  p.contested = ins.A > 0 && ins.B > 0;
+  return ins;
+}
+
+function updateAssault(dt) {
+  const b = state.battle, p = b.points[0];
+  const ins = countInside(p);
+  const att = b.attackers, def = other(att), ours = att === 'A';
+  if (ins[att] > 0 && ins[def] === 0) p.prog = Math.min(100, p.prog + (1.4 + 0.6 * Math.min(ins[att], 3)) * dt);
+  else if (ins[def] > 0 && ins[att] === 0) p.prog = Math.max(0, p.prog - 1.5 * dt);
+  for (const m of [25, 50, 75]) if (p.prog >= m && p.milestone < m) {
+    p.milestone = m;
+    msg(ours ? `CAPTURA AL ${m}%` : `¡EL ENEMIGO CAPTURA EL PUNTO: ${m}%!`, ours ? C.ally : C.bad, 2.5);
+    sfx.beep(0.7, ours ? 1100 : 500);
+  }
+  if (p.prog < p.milestone - 25) p.milestone -= 25;
+  if (p.contested && !p.wasContested) msg('PUNTO ALFA DISPUTADO', C.warn, 2);
+  p.wasContested = p.contested;
+  paintBeacon(p, new THREE.Color(0xffffff).lerp(new THREE.Color(ownerColor(att)), p.prog / 100));
+  if (p.prog >= 100) return endBattle(att, ours ? 'PUNTO ALFA CAPTURADO' : 'EL ENEMIGO HA CAPTURADO EL PUNTO ALFA');
+  if (b.timer <= 0) return endBattle(def, ours ? 'TIEMPO AGOTADO — NO SE CAPTURÓ EL PUNTO' : 'PUNTO ALFA DEFENDIDO HASTA EL FINAL');
+}
+
+function updateConquest(dt) {
+  const b = state.battle;
+  for (const p of b.points) {
+    const ins = countInside(p);
+    const rate = (n) => 4 + 1.5 * Math.min(n, 3);
+    if (ins.A > 0 && ins.B === 0) p.prog = Math.min(100, p.prog + rate(ins.A) * dt);
+    else if (ins.B > 0 && ins.A === 0) p.prog = Math.max(-100, p.prog - rate(ins.B) * dt);
+    const owner = p.prog >= 100 ? 'A' : p.prog <= -100 ? 'B' : p.owner === 'A' && p.prog > 0 ? 'A' : p.owner === 'B' && p.prog < 0 ? 'B' : null;
+    if (owner !== p.owner) {
+      if (owner === 'A') { msg(`${p.name} CAPTURADO`, C.ally, 2.5); sfx.beep(0.8, 1200); }
+      else if (owner === 'B') { msg(`¡EL ENEMIGO HA TOMADO ${p.name}!`, C.bad, 2.5); sfx.beep(0.8, 450); }
+      else msg(`${p.name} NEUTRALIZADO`, C.warn, 2);
+      p.owner = owner;
+    }
+    if (p.contested && !p.wasContested) msg(`${p.name} DISPUTADO`, C.warn, 1.5);
+    p.wasContested = p.contested;
+    if (p.owner) b.score[p.owner] += dt;
+    const k = Math.abs(p.prog) / 100;
+    paintBeacon(p, new THREE.Color(0xffffff).lerp(new THREE.Color(ownerColor(p.prog >= 0 ? 'A' : 'B')), k));
+  }
+  // la IA reparte sus objetivos
+  for (const e of entities) {
+    if (!e.alive || !e.ai) continue;
+    e.ai.goalT = (e.ai.goalT ?? 0) - dt;
+    const gp = e.ai.goalPoint;
+    if (e.ai.goalT <= 0 || (gp && gp.owner === e.team && !gp.contested && Math.random() < dt * 0.3)) chooseConquestGoal(e);
+  }
+  const G = BATTLE.conquestGoal;
+  if (b.score.A >= G) return endBattle('A', 'META DE CONQUISTA ALCANZADA');
+  if (b.score.B >= G) return endBattle('B', 'EL ENEMIGO HA ALCANZADO LA META');
+  if (b.timer <= 0) {
+    if (Math.floor(b.score.A) === Math.floor(b.score.B)) return endBattle(null, 'TIEMPO AGOTADO — EMPATE');
+    return endBattle(b.score.A > b.score.B ? 'A' : 'B', 'TIEMPO AGOTADO — GANA QUIEN MÁS PUNTOS SUMA');
+  }
+}
+
+function updateEscort(dt) {
+  const b = state.battle;
+  updateConvoy(dt);
+  const lost = b.convoy.filter(c => !c.alive).length;
+  if (b.arrived >= 2) return endBattle('A', `CONVOY A SALVO (${b.arrived}/3 CAMIONES)`);
+  if (lost >= 2) return endBattle('B', 'CONVOY DESTRUIDO');
+  if (b.timer <= 0) return endBattle('B', 'EL CONVOY NO LLEGÓ A TIEMPO');
+}
+
 function updateBattle(dt) {
   const b = state.battle;
   if (!b || b.over) return;
   b.timer -= dt;
-  const ins = { A: 0, B: 0 };
-  for (const e of entities) if (e.alive && Math.hypot(e.pos.x - b.point.x, e.pos.z - b.point.z) < b.radius) ins[e.team]++;
-  b.inside = ins;
-  const att = b.attackers, def = other(att);
-  b.contested = ins[att] > 0 && ins[def] > 0;
-  if (ins[att] > 0 && ins[def] === 0) b.capture = Math.min(100, b.capture + (1.4 + 0.6 * Math.min(ins[att], 3)) * dt);
-  else if (ins[def] > 0 && ins[att] === 0) b.capture = Math.max(0, b.capture - 1.5 * dt);
-  const ours = att === 'A';
-  for (const m of [25, 50, 75]) if (b.capture >= m && b.milestone < m) {
-    b.milestone = m;
-    msg(ours ? `CAPTURA AL ${m}%` : `¡EL ENEMIGO CAPTURA EL PUNTO: ${m}%!`, ours ? C.ally : C.bad, 2.5);
-    sfx.beep(0.7, ours ? 1100 : 500);
-  }
-  if (b.capture < b.milestone - 25) b.milestone -= 25;
-  if (b.contested && !b.wasContested) msg('PUNTO ALFA DISPUTADO', C.warn, 2);
-  b.wasContested = b.contested;
-  // baliza: color del atacante según el progreso
-  const ac = new THREE.Color(att === 'A' ? 0x4090ff : 0xff4020);
-  const col = new THREE.Color(0xffffff).lerp(ac, b.capture / 100);
-  if (b.contested && Math.sin(state.time * 10) > 0) col.setHex(0xffb020);
-  b.beacon.capMat.color.copy(col);
-  b.beacon.beamMat.color.copy(col);
-  b.beacon.beamMat.opacity = 0.22 + 0.1 * Math.sin(state.time * 3);
   // refuerzos
   for (let i = b.respawns.length - 1; i >= 0; i--) {
     const r = b.respawns[i];
@@ -1480,26 +1690,27 @@ function updateBattle(dt) {
     msg('BLANCO DE LA ESCUADRA ELIMINADO — LIBRE ACCIÓN', C.ally, 2.5);
     sfx.radio();
   }
-  // final
-  if (b.capture >= 100) return endBattle(att, ours ? 'PUNTO ALFA CAPTURADO' : 'EL ENEMIGO HA CAPTURADO EL PUNTO ALFA');
-  if (b.timer <= 0) return endBattle(def, ours ? 'TIEMPO AGOTADO — NO SE CAPTURÓ EL PUNTO' : 'PUNTO ALFA DEFENDIDO HASTA EL FINAL');
-  for (const t of ['A', 'B']) {
-    if (b.tickets[t] <= 0 && !entities.some(e => e.alive && e.team === t) && !b.respawns.some(r => r.team === t))
-      return endBattle(other(t), t === 'A' ? 'ESCUADRA ANIQUILADA — SIN REFUERZOS' : 'FUERZAS ENEMIGAS ANIQUILADAS');
-  }
   // eyección manual (mantener Z)
   if (player.alive && keys.KeyZ) {
     state.ejectHold += dt;
-    if (state.ejectHold > 1.2) { state.ejectHold = 0; damageLog(player, null); kill(player); }
+    if (state.ejectHold > 1.2) { state.ejectHold = 0; player.lastHitBy = null; kill(player); }
   } else state.ejectHold = 0;
+  // objetivo
+  if (b.mode === 'conquest') updateConquest(dt);
+  else if (b.mode === 'escort') updateEscort(dt);
+  else updateAssault(dt);
+  if (b.over) return;
+  for (const t of ['A', 'B']) {
+    if (b.tickets[t] <= 0 && !entities.some(e => e.alive && e.team === t && e.kind === 'mech') && !b.respawns.some(r => r.team === t))
+      return endBattle(other(t), t === 'A' ? 'ESCUADRA ANIQUILADA — SIN REFUERZOS' : 'FUERZAS ENEMIGAS ANIQUILADAS');
+  }
 }
-function damageLog(e, src) { e.lastHitBy = src; }
 
 function endBattle(winner, reason) {
   const b = state.battle;
   b.over = true;
   state.screen = 'result';
-  state.result = { win: winner === 'A', reason };
+  state.result = { win: winner === 'A', draw: winner === null, reason };
   document.exitPointerLock?.();
   cockpit.group.visible = false;
   player.model.root.visible = true;
@@ -1509,7 +1720,7 @@ function endBattle(winner, reason) {
 
 function battleKill(e) {
   const b = state.battle;
-  if (!b || b.over) return;
+  if (!b || b.over || e.kind === 'convoy') return;
   if (e.kind === 'mech') eject(e, e.isPlayer);
   if (b.tickets[e.team] > 0) {
     b.tickets[e.team]--;
@@ -1517,55 +1728,94 @@ function battleKill(e) {
   }
 }
 
-// marcador del punto ALFA (se pega al borde si queda fuera de pantalla)
-function drawObjectiveMarker() {
-  const b = state.battle;
-  const wp = b.point.clone(); wp.y += 14;
-  const pr = wp.clone().project(camera);
+// ---- HUD
+// marcador de un lugar (se pega al borde de la pantalla si queda fuera)
+function drawPlaceMarker(pos, label, col, inside) {
+  const focus = state.ejected && playerPod() ? playerPod().mesh.position : player.pos;
+  const d = Math.round(Math.hypot(pos.x - focus.x, pos.z - focus.z));
+  if (inside && d < inside && state.mode === 'cockpit' && !state.ejected) {
+    txt(g, `EN ZONA ${label}`, VW / 2, VH * 0.42 + 64, { size: 10, align: 'center', color: col, glow: 4 });
+    return;
+  }
+  const wp = pos.clone(); wp.y += 14;
+  const pr = wp.project(camera);
   let x = (pr.x + 1) / 2 * VW, y = (1 - pr.y) / 2 * VH;
   if (pr.z > 1) { x = VW - x; y = VH - 10; }
   const m = 30, top = 60, bottom = VH - 140;
   const off = x < m || x > VW - m || y < top || y > bottom || pr.z > 1;
   x = clamp(x, m, VW - m); y = clamp(y, top, bottom);
-  const ours = b.attackers === 'A';
-  const col = b.contested ? C.warn : b.capture > 0 ? (ours ? C.ally : C.enemy) : C.white;
-  const focus = state.ejected && playerPod() ? playerPod().mesh.position : player.pos;
-  const d = Math.round(Math.hypot(b.point.x - focus.x, b.point.z - focus.z));
-  if (d < b.radius && state.mode === 'cockpit' && !state.ejected) {
-    txt(g, 'EN ZONA ALFA', VW / 2, VH * 0.42 + 64, { size: 10, align: 'center', color: col, glow: 4 });
-    return;
-  }
   g.strokeStyle = col; g.lineWidth = 2;
   g.beginPath(); g.moveTo(x, y - 8); g.lineTo(x + 8, y); g.lineTo(x, y + 8); g.lineTo(x - 8, y); g.closePath(); g.stroke();
   g.lineWidth = 1;
-  txt(g, `ALFA ${d}m${off ? ' ►' : ''}`, x, y + 20, { size: 9, align: 'center', color: col, glow: 3 });
+  txt(g, `${label} ${d}m${off ? ' ►' : ''}`, x, y + 20, { size: 9, align: 'center', color: col, glow: 3 });
 }
+const cssOwner = (t) => (t === 'A' ? C.ally : t === 'B' ? C.enemy : C.white);
 
 function drawBattleHud() {
   const b = state.battle;
   if (!b) return;
-  drawObjectiveMarker();
+  // marcadores
+  if (b.mode === 'escort') {
+    drawPlaceMarker(b.extract, 'EXTRACCIÓN', '#40ff80', 0);
+    const lead = convoyLead();
+    if (lead) drawPlaceMarker(lead.pos, 'CONVOY', C.white, 0);
+  } else for (const p of b.points) {
+    const col = p.contested ? C.warn : b.mode === 'conquest' ? cssOwner(p.owner) : p.prog > 0 ? cssOwner(b.attackers) : C.white;
+    drawPlaceMarker(p.pos, p.name, col, BATTLE.radius);
+  }
   const cock = state.mode === 'cockpit' && !state.ejected && state.screen === 'play';
   const cx = VW / 2, y = cock ? 76 : 8;
-  const ours = b.attackers === 'A';
-  txt(g, ours ? 'ASALTO · CAPTURA EL PUNTO ALFA' : 'DEFENSA · PROTEGE EL PUNTO ALFA', cx, y + 10, { size: 10, align: 'center', color: C.white, glow: 3 });
   const w = 220, x = cx - w / 2, by = y + 15;
-  g.fillStyle = 'rgba(0,10,4,0.6)'; g.fillRect(x, by, w, 10);
-  g.strokeStyle = C.dim; g.strokeRect(x + 0.5, by + 0.5, w - 1, 10);
-  g.fillStyle = ours ? C.ally : C.enemy;
-  g.fillRect(x + 2, by + 2, (w - 4) * b.capture / 100, 6);
-  const status = b.contested ? (Math.sin(state.time * 8) > 0 ? 'DISPUTADO' : '') : b.inside[b.attackers] > 0 ? `CAPTURANDO ×${b.inside[b.attackers]}` : b.inside[other(b.attackers)] > 0 ? 'RECUPERANDO' : '';
-  txt(g, `${Math.floor(b.capture)}%  ${status}`, cx, by + 22, { size: 9, align: 'center', color: b.contested ? C.warn : C.white, glow: 2 });
+  const title = {
+    assault: 'ASALTO · CAPTURA EL PUNTO ALFA', defense: 'DEFENSA · PROTEGE EL PUNTO ALFA',
+    conquest: `CONQUISTA · META ${BATTLE.conquestGoal}`, escort: 'ESCOLTA · LLEVA EL CONVOY A LA EXTRACCIÓN',
+  }[b.mode];
+  txt(g, title, cx, y + 10, { size: 10, align: 'center', color: C.white, glow: 3 });
+  let status = '';
+  if (b.mode === 'conquest') {
+    const bw = 64;
+    b.points.forEach((p, i) => {
+      const px = x + i * (bw + 14);
+      g.fillStyle = 'rgba(0,10,4,0.6)'; g.fillRect(px, by, bw, 12);
+      g.strokeStyle = p.contested && Math.sin(state.time * 8) > 0 ? C.warn : cssOwner(p.owner); g.strokeRect(px + 0.5, by + 0.5, bw - 1, 11);
+      const f = Math.abs(p.prog) / 100;
+      g.fillStyle = p.prog >= 0 ? C.ally : C.enemy; g.globalAlpha = p.owner ? 0.9 : 0.5;
+      g.fillRect(px + 2, by + 2, (bw - 4) * f, 8); g.globalAlpha = 1;
+      txt(g, p.name[0], px + bw / 2, by + 10, { size: 9, align: 'center', color: C.white, glow: 2 });
+    });
+    status = `${Math.floor(b.score.A)} — ${Math.floor(b.score.B)}`;
+  } else {
+    const f = b.mode === 'escort' ? b.progress : b.points[0].prog / 100;
+    g.fillStyle = 'rgba(0,10,4,0.6)'; g.fillRect(x, by, w, 10);
+    g.strokeStyle = C.dim; g.strokeRect(x + 0.5, by + 0.5, w - 1, 10);
+    g.fillStyle = b.mode === 'escort' ? '#40ff80' : cssOwner(b.attackers);
+    g.fillRect(x + 2, by + 2, (w - 4) * f, 6);
+    if (b.mode === 'escort') {
+      const alive = b.convoy.filter(c => c.alive && !c.arrived).length;
+      status = b.convoyDelay > 0 ? `SALIDA EN ${Math.ceil(b.convoyDelay)}s` : `RUTA ${Math.floor(f * 100)}% · A SALVO ${b.arrived}/3 · EN RUTA ${alive}`;
+    } else {
+      const p = b.points[0];
+      const st = p.contested ? (Math.sin(state.time * 8) > 0 ? 'DISPUTADO' : '') : p.inside[b.attackers] > 0 ? `CAPTURANDO ×${p.inside[b.attackers]}` : p.inside[other(b.attackers)] > 0 ? 'RECUPERANDO' : '';
+      status = `${Math.floor(p.prog)}%  ${st}`;
+    }
+  }
+  txt(g, status, cx, by + 22, { size: 9, align: 'center', color: C.white, glow: 2 });
   const mm = Math.max(0, Math.ceil(b.timer)), tt = `${Math.floor(mm / 60)}:${String(mm % 60).padStart(2, '0')}`;
-  txt(g, `AZUL ${b.tickets.A}`, x, by + 22, { size: 10, color: C.ally });
-  txt(g, `ROJO ${b.tickets.B}`, x + w, by + 22, { size: 10, align: 'right', color: C.enemy });
-  txt(g, tt, cx, by - 16 < 0 ? by + 34 : by + 34, { size: 11, align: 'center', color: b.timer < 60 ? C.bad : C.white });
-  // mechs vivos por equipo
-  const alive = (t) => entities.filter(e => e.alive && e.team === t).length;
+  txt(g, `AZUL ${b.tickets.A}`, x - 8, by + 10, { size: 10, align: 'right', color: C.ally });
+  txt(g, `ROJO ${b.tickets.B}`, x + w + 8, by + 10, { size: 10, color: C.enemy });
+  txt(g, tt, cx, by + 34, { size: 11, align: 'center', color: b.timer < 60 ? C.bad : C.white });
+  // mechs vivos por equipo (y camiones en escolta)
+  const alive = (t) => entities.filter(e => e.alive && e.team === t && e.kind === 'mech').length;
   for (let i = 0; i < 5; i++) {
     g.fillStyle = i < alive('A') ? C.ally : 'rgba(95,168,255,0.2)'; g.fillRect(x + i * 8, by + 28, 6, 4);
     g.fillStyle = i < alive('B') ? C.enemy : 'rgba(255,90,64,0.2)'; g.fillRect(x + w - 6 - i * 8, by + 28, 6, 4);
   }
+  if (b.mode === 'escort') b.convoy.forEach((c, i) => {
+    const r = c.alive ? c.armor.CT / c.maxArmor.CT : 0;
+    g.strokeStyle = c.arrived ? '#40ff80' : c.alive ? C.white : C.bad;
+    g.strokeRect(x + 50 + i * 42 + 0.5, by + 40.5, 36, 5);
+    g.fillStyle = c.arrived ? '#40ff80' : r > 0.5 ? C.main : C.warn; g.fillRect(x + 52 + i * 42, by + 42, 32 * r, 2);
+  });
   // eyección
   if (state.ejected && state.screen === 'play') {
     txt(g, 'EYECTADO', cx, VH * 0.56, { size: 26, align: 'center', color: C.warn, glow: 14 });
@@ -1581,16 +1831,17 @@ function drawBattleHud() {
 
 function drawResult() {
   const r = state.result, b = state.battle;
-  g.fillStyle = r.win ? 'rgba(0,20,40,0.45)' : 'rgba(40,0,0,0.45)'; g.fillRect(0, 0, VW, VH);
-  txt(g, r.win ? 'VICTORIA' : 'DERROTA', VW / 2, VH / 2 - 30, { size: 40, align: 'center', color: r.win ? C.ally : C.bad, glow: 18 });
+  g.fillStyle = r.draw ? 'rgba(20,20,0,0.45)' : r.win ? 'rgba(0,20,40,0.45)' : 'rgba(40,0,0,0.45)'; g.fillRect(0, 0, VW, VH);
+  txt(g, r.draw ? 'EMPATE' : r.win ? 'VICTORIA' : 'DERROTA', VW / 2, VH / 2 - 30, { size: 40, align: 'center', color: r.draw ? C.warn : r.win ? C.ally : C.bad, glow: 18 });
   txt(g, r.reason, VW / 2, VH / 2, { size: 13, align: 'center', color: C.white });
   txt(g, `DERRIBOS ${state.kills} · MECHS PERDIDOS ${state.deaths} · PUNTOS ${state.score}`, VW / 2, VH / 2 + 24, { size: 11, align: 'center', color: C.main });
-  txt(g, `REFUERZOS RESTANTES  AZUL ${b.tickets.A} · ROJO ${b.tickets.B}`, VW / 2, VH / 2 + 42, { size: 10, align: 'center', color: C.dim, glow: 0 });
+  const extra = b.mode === 'conquest' ? ` · MARCADOR ${Math.floor(b.score.A)}–${Math.floor(b.score.B)}` : '';
+  txt(g, `${OBJ_NAME[b.mode]} · REFUERZOS AZUL ${b.tickets.A} · ROJO ${b.tickets.B}${extra}`, VW / 2, VH / 2 + 42, { size: 10, align: 'center', color: C.dim, glow: 0 });
   txt(g, 'ENTER HANGAR  ·  M MENÚ PRINCIPAL', VW / 2, VH / 2 + 68, { size: 11, align: 'center', color: C.dim });
 }
 
 // ---------------------------------------------------------------- órdenes de escuadra
-// 1 SEGUIDME · 2 ATACAD MI BLANCO · 3 AL PUNTO · 4 LIBRE ACCIÓN
+// 1 SEGUIDME · 2 ATACAD MI BLANCO · 3 OBJETIVO · 4 LIBRE ACCIÓN
 const SLOTS = [[-14, 12], [14, 12], [-26, 24], [26, 24]];   // [derecha, atrás] relativo al jugador
 function followSlot(e) {
   const [ox, oz] = SLOTS[(e.slot ?? 0) % SLOTS.length];
@@ -1603,7 +1854,11 @@ function orderName(o) {
   const b = state.battle;
   if (o.type === 'follow') return 'SEGUIDME';
   if (o.type === 'attack') return `ATACAD A ${o.target.name}`;
-  if (o.type === 'point') return b.attackers === 'A' ? 'TOMAD EL PUNTO ALFA' : 'DEFENDED EL PUNTO ALFA';
+  if (o.type === 'point') {
+    if (b.mode === 'escort') return 'PROTEGED EL CONVOY';
+    if (b.mode === 'conquest') return `TOMAD ${o.point.name}`;
+    return b.attackers === 'A' ? 'TOMAD EL PUNTO ALFA' : 'DEFENDED EL PUNTO ALFA';
+  }
   return 'LIBRE ACCIÓN';
 }
 function issueOrder(type) {
@@ -1612,6 +1867,13 @@ function issueOrder(type) {
   if (type === 'attack') {
     if (!state.target || !state.target.alive || !hostile(state.target, player)) { msg('SIN BLANCO FIJADO — PULSA Q PRIMERO', C.warn, 2); sfx.beep(0.5, 300); return; }
     b.order = { type, target: state.target };
+  } else if (type === 'point' && b.mode === 'conquest') {
+    // el punto más cercano al jugador que aún no sea nuestro
+    const cands = b.points.filter(p => p.owner !== 'A' || p.contested);
+    const list = cands.length ? cands : b.points;
+    const pp = player.pos;
+    const point = list.reduce((a, c) => (Math.hypot(c.pos.x - pp.x, c.pos.z - pp.z) < Math.hypot(a.pos.x - pp.x, a.pos.z - pp.z) ? c : a));
+    b.order = { type, point };
   } else b.order = { type };
   msg(`ORDEN: ${orderName(b.order)}`, C.ally, 2.5);
   sfx.radio();
@@ -1644,7 +1906,7 @@ function drawSquadPanel() {
     g.fillStyle = r > 0.5 ? C.main : r > 0.25 ? C.warn : C.bad; g.fillRect(x + 58, yy - 6, 40 * r, 4);
     txt(g, e.alive ? (e.ai.status ?? '—') : 'EYECTADO', x + w - 6, yy, { size: 7, align: 'right', color: e.alive ? C.dim : C.bad, glow: 0 });
   });
-  txt(g, '1 SEGUIR 2 ATACAR 3 PUNTO 4 LIBRE', x + 6, y + h - 4, { size: 7, color: C.dim, glow: 0 });
+  txt(g, '1 SEGUIR 2 ATACAR 3 OBJETIVO 4 LIBRE', x + 6, y + h - 4, { size: 7, color: C.dim, glow: 0 });
 }
 
 // ---------------------------------------------------------------- entrenamiento
@@ -1765,11 +2027,9 @@ function drawLessons() {
 }
 
 function menuStart(i) {
-  if (i === 2) enterHangar('top', 'training');
-  else if (i === 3) enterHangar('top', 'battle');
-  else enterHangar(i === 0 ? 'top' : 'cockpit', 'waves');
+  enterHangar('top', i === 0 ? 'training' : 'battle');
 }
-const gameKind = () => state.training ? 'training' : state.battleMode ? 'battle' : 'waves';
+const gameKind = () => (state.training ? 'training' : 'battle');
 
 // ---------------------------------------------------------------- visión térmica
 // Cada objeto con userData.heat (0..1) se dibuja con un material gris según su
@@ -1817,16 +2077,16 @@ function toggleThermal() {
 const SAVE_KEY = 'steelhorizon.hangar.v1';
 const hangar = { chassis: 'centinela', cfgs: {}, row: 0, zone: 'desierto', time: 'dusk', objective: 'assault', view: 'top' };
 // filas: chasis · monturas · zona · hora · [objetivo · vista en batalla] · desplegar
-const ROW_ZONE = MOUNTS.length + 1, ROW_TIME = MOUNTS.length + 2;
-const ROW_OBJ = MOUNTS.length + 3, ROW_VIEW = MOUNTS.length + 4;
-const hrows = () => MOUNTS.length + 4 + (state.battleMode ? 2 : 0);
+const missionRows = () => (state.battleMode ? ['zone', 'time', 'obj', 'view'] : ['zone', 'time', 'view']);
+const ROW = (k) => { const i = missionRows().indexOf(k); return i < 0 ? -1 : MOUNTS.length + 1 + i; };
+const hrows = () => MOUNTS.length + 1 + missionRows().length + 1;
 const ZONE_IDS = Object.keys(ZONES), TIME_IDS = Object.keys(TIMES);
 try {
   const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
   if (saved && saved.cfgs) { hangar.chassis = saved.chassis; hangar.cfgs = saved.cfgs; }
   if (saved && ZONES[saved.zone]) hangar.zone = saved.zone;
   if (saved && TIMES[saved.time]) hangar.time = saved.time;
-  if (saved && saved.objective) hangar.objective = saved.objective;
+  if (saved && OBJECTIVES.includes(saved.objective)) hangar.objective = saved.objective;
   if (saved && saved.view) hangar.view = saved.view;
 } catch (_) { /* sin almacenamiento */ }
 
@@ -1850,11 +2110,11 @@ function refreshHangarModel() {
   hangar3d.setMech(ch.colors, loadout, ch.scale);
 }
 
-function enterHangar(mode, kind = 'waves') {
+function enterHangar(mode, kind = 'battle') {
   initAudio();
   state.training = kind === 'training';
   state.battleMode = kind === 'battle';
-  state.pendingMode = state.battleMode ? hangar.view : mode;
+  state.pendingMode = hangar.view;
   state.screen = 'hangar';
   state.msgs = [];
   hangar.row = 0;
@@ -1869,16 +2129,16 @@ function hangarChange(dir) {
   if (hangar.row === 0) {
     const i = CHASSIS.indexOf(ch);
     hangar.chassis = CHASSIS[(i + dir + CHASSIS.length) % CHASSIS.length].id;
-  } else if (hangar.row === ROW_ZONE) {
+  } else if (hangar.row === ROW('zone')) {
     hangar.zone = ZONE_IDS[(ZONE_IDS.indexOf(hangar.zone) + dir + ZONE_IDS.length) % ZONE_IDS.length];
     sfx.ui(); saveHangar(); return;
-  } else if (hangar.row === ROW_TIME) {
+  } else if (hangar.row === ROW('time')) {
     hangar.time = TIME_IDS[(TIME_IDS.indexOf(hangar.time) + dir + TIME_IDS.length) % TIME_IDS.length];
     sfx.ui(); saveHangar(); return;
-  } else if (state.battleMode && hangar.row === ROW_OBJ) {
-    hangar.objective = hangar.objective === 'assault' ? 'defense' : 'assault';
+  } else if (state.battleMode && hangar.row === ROW('obj')) {
+    hangar.objective = OBJECTIVES[(OBJECTIVES.indexOf(hangar.objective) + dir + OBJECTIVES.length) % OBJECTIVES.length];
     sfx.ui(); saveHangar(); return;
-  } else if (state.battleMode && hangar.row === ROW_VIEW) {
+  } else if (hangar.row === ROW('view')) {
     state.pendingMode = state.pendingMode === 'top' ? 'cockpit' : 'top';
     hangar.view = state.pendingMode;
     sfx.ui(); saveHangar(); return;
@@ -1963,8 +2223,9 @@ function drawHangar() {
 
   // ---- panel de misión: zona y hora
   const my = ly + 238;
-  const mrows = [[ROW_ZONE, 'ZONA', ZONES[hangar.zone].name], [ROW_TIME, 'HORA', TIMES[hangar.time].name]];
-  if (state.battleMode) mrows.push([ROW_OBJ, 'OBJET.', hangar.objective === 'assault' ? 'ASALTO' : 'DEFENSA'], [ROW_VIEW, 'VISTA', state.pendingMode === 'cockpit' ? 'CABINA' : 'TÁCTICA']);
+  const mrows = [[ROW('zone'), 'MAPA', ZONES[hangar.zone].name], [ROW('time'), 'HORA', TIMES[hangar.time].name]];
+  if (state.battleMode) mrows.push([ROW('obj'), 'OBJET.', OBJ_NAME[hangar.objective]]);
+  mrows.push([ROW('view'), 'VISTA', state.pendingMode === 'cockpit' ? 'CABINA' : 'TÁCTICA']);
   frame(g, lx, my, PW, 6 + mrows.length * 30, C.dim, 'MISIÓN');
   mrows.forEach(([r, k, v], i) => {
     const y = my + 3 + i * 30;
@@ -2004,20 +2265,26 @@ function drawHangar() {
     txt(g, `DAÑO ${dmg}   CALOR ${sw.heat}   RECARGA ${sw.cd}s`, rx + 10, dy + 24, { size: 9, glow: 1 });
     txt(g, `ALCANCE ${sw.range}m   PESO ${sw.tons}t`, rx + 10, dy + 38, { size: 9, glow: 1 });
     txt(g, 'G CAMBIA GRUPO DE DISPARO', rx + 10, dy + 56, { size: 8, color: C.dim, glow: 0 });
-  } else if (hangar.row === ROW_ZONE) {
+  } else if (hangar.row === ROW('zone')) {
     const zz = ZONES[hangar.zone];
     txt(g, `${zz.name}: ${zz.desc}`.toUpperCase(), rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
     if (zz.waterY !== null) txt(g, 'AGUA: −40% VELOCIDAD, +70% REFRIGERACIÓN', rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
     if (zz.forest > 0.3) txt(g, 'BOSQUE: COBERTURA, LOS ÁRBOLES CAEN', rx + 10, dy + 38, { size: 8, color: C.main, glow: 0 });
-  } else if (state.battleMode && hangar.row === ROW_OBJ) {
-    const as = hangar.objective === 'assault';
-    txt(g, as ? 'ASALTO: CAPTURA EL PUNTO ALFA' : 'DEFENSA: PROTEGE EL PUNTO ALFA', rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
-    txt(g, as ? 'QUÉDATE EN LA ZONA HASTA EL 100%' : 'AGUANTA HASTA QUE ACABE EL TIEMPO', rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
+    if (zz.city) txt(g, 'CALLES ESTRECHAS: EDIFICIOS COMO COBERTURA', rx + 10, dy + 24, { size: 8, color: C.main, glow: 0 });
+  } else if (state.battleMode && hangar.row === ROW('obj')) {
+    const D = {
+      assault: ['ASALTO: CAPTURA EL PUNTO ALFA', 'QUÉDATE EN LA ZONA HASTA EL 100%'],
+      defense: ['DEFENSA: PROTEGE EL PUNTO ALFA', 'AGUANTA HASTA QUE ACABE EL TIEMPO'],
+      conquest: ['CONQUISTA: ALFA, BRAVO Y CHARLIE', `CADA PUNTO PROPIO SUMA · META ${BATTLE.conquestGoal}`],
+      escort: ['ESCOLTA: 3 CAMIONES A LA EXTRACCIÓN', 'DEBEN LLEGAR 2 · EL ENEMIGO EMBOSCA'],
+    }[hangar.objective];
+    txt(g, D[0], rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
+    txt(g, D[1], rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
     txt(g, '5 VS 5 · REFUERZOS LIMITADOS · EYECCIÓN', rx + 10, dy + 38, { size: 8, color: C.dim, glow: 0 });
-  } else if (state.battleMode && hangar.row === ROW_VIEW) {
-    txt(g, 'VISTA INICIAL DE LA BATALLA', rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
+  } else if (state.battleMode && hangar.row === ROW('view')) {
+    txt(g, state.battleMode ? 'VISTA INICIAL DE LA BATALLA' : 'VISTA INICIAL DEL ENTRENAMIENTO', rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
     txt(g, 'B CAMBIA DE VISTA DURANTE LA PARTIDA', rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
-  } else if (hangar.row === ROW_TIME) {
+  } else if (hangar.row === ROW('time')) {
     txt(g, TIMES[hangar.time].name, rx + 10, dy + 8, { size: 10, color: C.white, glow: 1 });
     if (hangar.time === 'night') {
       txt(g, 'VISIBILIDAD REDUCIDA · FOCOS ENCENDIDOS', rx + 10, dy + 24, { size: 8, color: C.warn, glow: 0 });
@@ -2093,22 +2360,9 @@ function frameLoop(now) {
       else if (updateDead(e, dt)) { scene.remove(e.model.root); entities.splice(i, 1); }
     }
     updateProjectiles(dt);
-    // oleadas (o dianas en entrenamiento)
+    // dianas (entrenamiento) u objetivo de la batalla
     if (state.training) updateTraining(dt);
     else if (state.battleMode) updateBattle(dt);
-    else if (!entities.some(e => e.alive && hostile(e, player))) {
-      if (state.waveTimer <= 0) {
-        state.waveTimer = 6;
-        msg(`OLEADA ${state.wave} SUPERADA — REPARANDO`, C.cyan, 4);
-        for (const k of Object.keys(player.armor)) player.armor[k] = Math.min(player.maxArmor[k], player.armor[k] + player.maxArmor[k] * 0.35);
-        for (const k of ['LA', 'RA']) if (player.armor[k] > 0) player.model.sections[k].visible = true;
-        if (player.armor.LT > 0) player.model.sideL.visible = true;
-        if (player.armor.RT > 0) player.model.sideR.visible = true;
-        player.maxSpeed = player.baseSpeed * (player.armor.LEGS < player.maxArmor.LEGS * 0.5 ? 0.45 + player.armor.LEGS / player.maxArmor.LEGS : 1);
-      }
-      state.waveTimer -= dt;
-      if (state.waveTimer <= 0) spawnWave();
-    }
     if (player.heat > 80 && Math.floor(state.time * 3) !== Math.floor((state.time - dt) * 3)) sfx.beep(0.6, 1200);
   } else if (state.screen === 'dead' || state.screen === 'result') {
     for (let i = entities.length - 1; i >= 0; i--) { const e = entities[i]; if (!e.alive) updateDead(e, dt); else if (e.ai) { e.throttle = 0; moveEntity(e, dt); } }
@@ -2188,10 +2442,7 @@ window.addEventListener('keydown', (e) => {
   if (state.screen === 'menu') {
     if (e.code === 'Digit1' || e.code === 'Numpad1') menuStart(0);
     if (e.code === 'Digit2' || e.code === 'Numpad2') menuStart(1);
-    if (e.code === 'Digit3' || e.code === 'Numpad3') menuStart(2);
-    if (e.code === 'Digit4' || e.code === 'Numpad4') menuStart(3);
-    if (e.code === 'ArrowUp' || e.code === 'KeyW') { state.menuSel = (state.menuSel + 3) % 4; sfx.ui(); }
-    if (e.code === 'ArrowDown' || e.code === 'KeyS') { state.menuSel = (state.menuSel + 1) % 4; sfx.ui(); }
+    if (['ArrowUp', 'KeyW', 'ArrowDown', 'KeyS'].includes(e.code)) { state.menuSel = 1 - state.menuSel; sfx.ui(); }
     if (e.code === 'Enter' || e.code === 'Space') menuStart(state.menuSel);
   } else if (state.screen === 'hangar') {
     if (!e.repeat || e.code.startsWith('Arrow')) hangarKey(e.code);
