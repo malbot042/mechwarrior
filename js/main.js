@@ -75,6 +75,10 @@ const state = {
   shake: 0, flash: 0, staticN: 0,
   msgs: [],
   zoom: 70,
+  input: 'keys',      // keys | mouse (último dispositivo usado para apuntar)
+  track: false,       // seguimiento automático del blanco
+  aimDist: 60,
+  menuSel: 0,
   target: null,
   aim: new THREE.Vector3(),
   hitDirs: [],
@@ -216,7 +220,8 @@ function startGame(mode) {
   applyMode();
   if (mode === 'cockpit') lockPointer();
   spawnWave();
-  msg(mode === 'top' ? 'MODO TÁCTICO ACTIVO' : 'MODO CABINA — CLIC PARA CAPTURAR RATÓN', C.cyan, 4);
+  msg(mode === 'top' ? 'MODO TÁCTICO — FLECHAS APUNTAR · Q BLANCO' : 'MODO CABINA — FLECHAS APUNTAR · Q BLANCO', C.cyan, 4);
+  state.track = false; state.aimDist = 60;
 }
 
 function applyMode() {
@@ -524,72 +529,125 @@ function moveEntity(e, dt) {
 }
 
 // ---------------------------------------------------------------- jugador
+// Control por teclado: flechas apuntan el torso, Q/Tab cicla blancos (y activa
+// el seguimiento automático del torso), R activa/desactiva el seguimiento.
+function cycleTarget() {
+  const list = entities.filter(e => e.alive && !e.isPlayer)
+    .sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
+  if (!list.length) { msg('SIN BLANCOS', C.dim, 1.2); return; }
+  const i = list.indexOf(state.target);
+  state.target = list[(i + 1) % list.length];
+  state.track = true;
+  state.input = 'keys';
+  sfx.beep(0.7, 1320);
+}
+
+// gira el torso hacia una guiñada mundial con velocidad limitada
+function turnTorsoTo(p, worldYaw, rate, dt) {
+  const diff = wrap(worldYaw - (p.heading + p.torsoYaw));
+  p.torsoYaw = clamp(wrap(p.torsoYaw + clamp(diff, -rate * dt, rate * dt)), -1.9, 1.9);
+}
+
 function updatePlayer(dt) {
   const p = player;
   if (p.shutdown <= 0) {
-    if (keys.KeyW || keys.ArrowUp) p.throttle = Math.min(1, p.throttle + dt * 0.9);
-    if (keys.KeyS || keys.ArrowDown) p.throttle = Math.max(-0.4, p.throttle - dt * 0.9);
+    if (keys.KeyW) p.throttle = Math.min(1, p.throttle + dt * 0.9);
+    if (keys.KeyS) p.throttle = Math.max(-0.4, p.throttle - dt * 0.9);
     if (keys.KeyX) p.throttle = 0;
-    const turn = ((keys.KeyA || keys.ArrowLeft) ? 1 : 0) - ((keys.KeyD || keys.ArrowRight) ? 1 : 0);
+    const turn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
     p.heading += turn * p.turnRate * dt * (1 - 0.35 * Math.abs(p.speed) / 16);
   }
   if (Math.abs(p.throttle) < 0.04 && !keys.KeyW && !keys.KeyS) p.throttle = 0;
 
+  const ax = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
+  const ay = (keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0);
+  if (ax) state.track = false;
+  if (state.track && !(state.target && state.target.alive)) state.track = false;
+  const powered = p.shutdown <= 0;
+
   if (state.mode === 'top') {
-    // apuntar con el cursor
-    raycaster.setFromCamera(mouse.ndc, camera);
-    let aim = null, tgt = null, best = 12;
-    let ground = pickGround(raycaster.ray);
-    const hits = raycaster.intersectObjects(world.obstacles.filter(o => o.alive).map(o => o.mesh), false);
-    const onObs = hits.length && hits[0].distance < ground.distanceTo(raycaster.ray.origin);
-    if (onObs) ground = hits[0].point.clone();
-    for (const e of entities) {
-      if (!e.alive || e === p) continue;
-      const d = Math.hypot(e.pos.x - ground.x, e.pos.z - ground.z);
-      const sph = new THREE.Sphere(center(e), 5.5);
-      const onRay = raycaster.ray.intersectsSphere(sph);
-      const score = onRay ? 0 : d;
-      if (score < best) { best = score; tgt = e; }
+    let aim = null, tgt = null;
+    if (state.input === 'mouse') {
+      // apuntar con el cursor
+      raycaster.setFromCamera(mouse.ndc, camera);
+      let best = 12;
+      let ground = pickGround(raycaster.ray);
+      const hits = raycaster.intersectObjects(world.obstacles.filter(o => o.alive).map(o => o.mesh), false);
+      const onObs = hits.length && hits[0].distance < ground.distanceTo(raycaster.ray.origin);
+      if (onObs) ground = hits[0].point.clone();
+      for (const e of entities) {
+        if (!e.alive || e === p) continue;
+        const d = Math.hypot(e.pos.x - ground.x, e.pos.z - ground.z);
+        const onRay = raycaster.ray.intersectsSphere(new THREE.Sphere(center(e), 5.5));
+        const score = onRay ? 0 : d;
+        if (score < best) { best = score; tgt = e; }
+      }
+      aim = tgt ? center(tgt) : ground.clone().add(_v2.set(0, onObs ? 0 : 1.5, 0));
+      if (powered) turnTorsoTo(p, yawTo(p.pos, aim), 2.6, dt);
+    } else {
+      // apuntar con teclado
+      if (powered) p.torsoYaw = clamp(p.torsoYaw + ax * 1.7 * dt, -1.9, 1.9);
+      state.aimDist = clamp(state.aimDist + ay * 90 * dt, 15, 260);
+      if (state.track) {
+        tgt = state.target;
+        if (powered) turnTorsoTo(p, yawTo(p.pos, tgt.pos), 2.6, dt);
+      } else {
+        // fijación suave: enemigo dentro del cono del torso
+        const ty = p.heading + p.torsoYaw;
+        let best = 0.14;
+        for (const e of entities) {
+          if (!e.alive || e === p || e.pos.distanceTo(p.pos) > 400) continue;
+          const ang = Math.abs(wrap(yawTo(p.pos, e.pos) - ty));
+          if (ang < best) { best = ang; tgt = e; }
+        }
+      }
+      if (tgt) aim = center(tgt);
+      else {
+        const f = fwd(p.heading + p.torsoYaw, _v2);
+        aim = V().set(p.pos.x + f.x * state.aimDist, 0, p.pos.z + f.z * state.aimDist);
+        aim.y = heightAt(aim.x, aim.z) + 1.5;
+      }
     }
-    if (tgt) aim = center(tgt);
-    else aim = ground.clone().add(_v2.set(0, onObs ? 0 : 1.5, 0));
     state.target = tgt;
     state.aim.copy(aim);
-    // girar torso hacia el cursor (velocidad limitada)
-    const desired = yawTo(p.pos, aim);
-    const diff = wrap(desired - (p.heading + p.torsoYaw));
-    p.torsoYaw = clamp(wrap(p.torsoYaw + clamp(diff, -2.6 * dt, 2.6 * dt)), -1.9, 1.9);
     p.pitch = 0;
   } else {
-    // cabina: el ratón mueve torso y pitch
-    if (p.shutdown <= 0) {
-      p.torsoYaw = clamp(p.torsoYaw - mouse.dx * 0.0022, -1.9, 1.9);
-      p.pitch = clamp(p.pitch - mouse.dy * 0.0022, -0.45, 0.35);
+    // cabina: ratón y/o flechas mueven torso y pitch
+    if (powered) {
+      p.torsoYaw = clamp(p.torsoYaw - mouse.dx * 0.0022 + ax * 1.5 * dt, -1.9, 1.9);
+      p.pitch = clamp(p.pitch - mouse.dy * 0.0022 + (state.track ? 0 : ay * 0.8 * dt), -0.45, 0.35);
+      if (ax || ay) { mouse.sdx -= ax * 8; mouse.sdy -= ay * 8; }
     }
-    if (keys.KeyC) p.torsoYaw *= Math.max(0, 1 - dt * 5);
     const cp = camera.getWorldPosition(V());
+    if (state.track && powered) {
+      const tc = center(state.target);
+      turnTorsoTo(p, yawTo(p.pos, tc), 2.2, dt);
+      const desiredPitch = clamp(Math.atan2(tc.y - cp.y, Math.hypot(tc.x - cp.x, tc.z - cp.z)), -0.45, 0.35);
+      p.pitch += clamp(desiredPitch - p.pitch, -1.2 * dt, 1.2 * dt);
+    }
     const cd = camera.getWorldDirection(V());
     const tr = traceSegment(cp, cd, 600, p);
     state.aim.copy(tr.point);
-    // fijación de blanco: el enemigo más cercano al centro de la vista
-    let tgt = null, best = 0.12;
-    for (const e of entities) {
-      if (!e.alive || e === p) continue;
-      const to = center(e).sub(cp);
-      const dist = to.length();
-      if (dist > 500) continue;
-      const ang = to.normalize().angleTo(cd);
-      if (ang < best) { best = ang; tgt = e; }
+    if (!state.track) {
+      // fijación de blanco: el enemigo más cercano al centro de la vista
+      let tgt = null, best = 0.12;
+      for (const e of entities) {
+        if (!e.alive || e === p) continue;
+        const to = center(e).sub(cp);
+        if (to.length() > 500) continue;
+        const ang = to.normalize().angleTo(cd);
+        if (ang < best) { best = ang; tgt = e; }
+      }
+      if (tgt) state.target = tgt;
+      else if (state.target && (!state.target.alive || center(state.target).sub(cp).normalize().angleTo(cd) > 0.6)) state.target = null;
     }
-    if (tgt) state.target = tgt;
-    else if (state.target && (!state.target.alive || center(state.target).sub(cp).normalize().angleTo(cd) > 0.6)) state.target = null;
   }
-  if (keys.KeyC && state.mode === 'top') p.torsoYaw *= Math.max(0, 1 - dt * 5);
+  if (keys.KeyC) { state.track = false; p.torsoYaw *= Math.max(0, 1 - dt * 5); p.pitch *= Math.max(0, 1 - dt * 5); }
 
-  // disparo
-  if (mouse.b[0]) fireGroup(p, 0, state.aim, state.target);
-  if (mouse.b[2]) fireGroup(p, 1, state.aim, state.target);
-  if (keys.Space || keys.KeyE) fireGroup(p, 2, state.aim, state.target);
+  // disparo (ratón o teclado)
+  if (mouse.b[0] || keys.Space || keys.KeyJ) fireGroup(p, 0, state.aim, state.target);
+  if (mouse.b[2] || keys.KeyF || keys.KeyK) fireGroup(p, 1, state.aim, state.target);
+  if (keys.KeyE || keys.KeyL) fireGroup(p, 2, state.aim, state.target);
 }
 
 // ---------------------------------------------------------------- IA
@@ -771,7 +829,8 @@ function drawTopHud() {
   g.strokeStyle = 'rgba(134,255,156,0.45)'; g.setLineDash([3, 3]);
   g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(lf.x, lf.y); g.stroke(); g.setLineDash([]);
   // cursor / retícula
-  const mx = mouse.x * VW, my = mouse.y * VH;
+  let mx = mouse.x * VW, my = mouse.y * VH;
+  if (state.input === 'keys') { const a = proj(state.aim); mx = a.x; my = a.y; }
   const col = state.target ? C.bad : C.main;
   g.strokeStyle = col; g.lineWidth = 1.5;
   g.beginPath(); g.arc(mx, my, 7, 0, Math.PI * 2); g.stroke();
@@ -787,6 +846,8 @@ function drawTopHud() {
   txt(g, `OLEADA ${state.wave}`, 12, 20, { size: 13 });
   txt(g, `PUNTOS ${String(state.score).padStart(6, '0')}`, 12, 36, { size: 11 });
   txt(g, `HOSTILES ${entities.filter(e => e.alive && !e.isPlayer).length}`, 12, 50, { size: 11, color: C.enemy });
+  if (state.track) txt(g, 'SEGUIMIENTO DE BLANCO [R]', 12, 66, { size: 10, color: C.cyan });
+  else if (state.input === 'keys') txt(g, `ALCANCE MIRA ${Math.round(state.aimDist)}m [↑↓]`, 12, 66, { size: 9, color: C.dim, glow: 0 });
 
   const R = 58;
   frame(g, VW - R * 2 - 18, 8, R * 2 + 10, R * 2 + 10, C.dim, 'RADAR 300m');
@@ -798,7 +859,7 @@ function drawTopHud() {
 
   frame(g, 126, py, 176, 92, C.dim, 'ARMAS');
   drawWeapons(g, 132, py + 8, 164, p.weapons, p.armor, 15, 10);
-  txt(g, 'LMB G1 · RMB G2 · ESP G3', 132, py + 86, { size: 8, color: C.dim, glow: 0 });
+  txt(g, 'ESP/J G1 · F/K G2 · E/L G3', 132, py + 86, { size: 8, color: C.dim, glow: 0 });
 
   frame(g, VW - 160, py, 152, 92, C.dim, 'SISTEMAS');
   txt(g, 'CALOR', VW - 152, py + 16, { size: 9 });
@@ -831,7 +892,7 @@ function drawCockpitHud() {
     if (isT) {
       txt(g, `${e.name}`, s.x + w / 2 + 4, s.y - w / 2 + 8, { size: 9, color: C.white, glow: 3 });
       txt(g, `${Math.round(d)}m`, s.x + w / 2 + 4, s.y - w / 2 + 19, { size: 9, color: C.white, glow: 3 });
-      if (Math.sin(state.time * 8) > -0.3) txt(g, 'BLOQUEO', s.x, s.y + w / 2 + 11, { size: 9, align: 'center', color: C.bad });
+      if (Math.sin(state.time * 8) > -0.3) txt(g, state.track ? 'SEGUIMIENTO' : 'BLOQUEO', s.x, s.y + w / 2 + 11, { size: 9, align: 'center', color: state.track ? C.cyan : C.bad });
     }
   }
   // punto de convergencia del arma (proyección del punto de mira)
@@ -964,7 +1025,7 @@ function drawMenu() {
   menuRects = [];
   opts.forEach(([k, a, b], i) => {
     const y = 190 + i * 64, w = 380, x = cx - w / 2;
-    const hover = mouse.x * VW > x && mouse.x * VW < x + w && mouse.y * VH > y && mouse.y * VH < y + 50;
+    const hover = state.menuSel === i;
     frame(g, x, y, w, 50, hover ? C.main : C.dim);
     if (hover) { g.fillStyle = 'rgba(134,255,156,0.08)'; g.fillRect(x, y, w, 50); }
     txt(g, `[${k}] ${a}`, x + 16, y + 22, { size: 16 });
@@ -973,11 +1034,12 @@ function drawMenu() {
   });
   const lines = [
     'W/S ACELERADOR · A/D GIRAR PIERNAS · X PARAR · C CENTRAR TORSO',
-    'CLIC IZQ LÁSERES · CLIC DER PPC · ESPACIO MISILES LRM',
-    'RUEDA ZOOM (TÁCTICO) · T PALETA CRT · ESC PAUSA',
+    'FLECHAS APUNTAR TORSO · Q/TAB SIGUIENTE BLANCO · R SEGUIMIENTO',
+    'ESPACIO/J LÁSERES · F/K PPC · E/L MISILES LRM',
+    'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA · RUEDA ZOOM · T PALETA · ESC PAUSA',
   ];
   lines.forEach((l, i) => txt(g, l, cx, 350 + i * 16, { size: 10, align: 'center', color: C.main, glow: 2 }));
-  if (Math.sin(state.time * 4) > 0) txt(g, 'SELECCIONE MODO DE PILOTAJE', cx, 425, { size: 12, align: 'center', color: C.white });
+  if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2', cx, 432, { size: 12, align: 'center', color: C.white });
   txt(g, `PALETA: ${['COLOR', 'ÁMBAR', 'FÓSFORO VERDE'][state.palette]}`, 10, VH - 10, { size: 9, color: C.dim, glow: 0 });
 }
 let menuRects = [];
@@ -1051,7 +1113,7 @@ function frameLoop(now) {
   if (cockpit.group.visible && player) {
     cockpit.update(dt, state.time, {
       throttle: player.throttle, heat: player.heat / 100, damaged: SECTIONS.some(k => k in player.armor && player.armor[k] < player.maxArmor[k] * 0.33),
-      mdx: mouse.sdx, mdy: mouse.sdy, firing: mouse.b[0] || mouse.b[2], shutdown: player.shutdown > 0,
+      mdx: mouse.sdx, mdy: mouse.sdy, firing: mouse.b[0] || mouse.b[2] || keys.Space || keys.KeyJ || keys.KeyF || keys.KeyK, shutdown: player.shutdown > 0,
     });
     updateCockpitScreens(dt);
   }
@@ -1088,12 +1150,22 @@ function setupMenuScene() {
 // ---------------------------------------------------------------- entrada
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
-  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+  if (e.code.startsWith('Arrow')) state.input = 'keys';
   if (e.code === 'KeyT') { state.palette = (state.palette + 1) % 3; sfx.ui(); }
   if (state.screen === 'menu') {
     if (e.code === 'Digit1' || e.code === 'Numpad1') startGame('top');
     if (e.code === 'Digit2' || e.code === 'Numpad2') startGame('cockpit');
+    if (['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS'].includes(e.code)) { state.menuSel = 1 - state.menuSel; sfx.ui(); }
+    if (e.code === 'Enter' || e.code === 'Space') startGame(state.menuSel === 0 ? 'top' : 'cockpit');
   } else if (state.screen === 'play') {
+    if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
+    if (e.code === 'KeyR' && !e.repeat) {
+      if (state.track) state.track = false;
+      else if (state.target && state.target.alive) { state.track = true; state.input = 'keys'; }
+      else cycleTarget();
+      sfx.ui();
+    }
     if (e.code === 'Escape' || e.code === 'KeyP') { state.screen = 'pause'; document.exitPointerLock?.(); }
   } else if (state.screen === 'pause') {
     if (e.code === 'Enter' || e.code === 'KeyP') resume();
@@ -1124,6 +1196,11 @@ cv.addEventListener('mousemove', (e) => {
   mouse.x = e.clientX / window.innerWidth;
   mouse.y = e.clientY / window.innerHeight;
   mouse.ndc.set(mouse.x * 2 - 1, -(mouse.y * 2 - 1));
+  if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2 && !state.track) state.input = 'mouse';
+  if (state.screen === 'menu') menuRects.forEach((r, i) => {
+    const x = mouse.x * VW, y = mouse.y * VH;
+    if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) state.menuSel = i;
+  });
   if (document.pointerLockElement === cv) {
     mouse.dx += e.movementX; mouse.dy += e.movementY;
     mouse.sdx += e.movementX; mouse.sdy += e.movementY;

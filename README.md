@@ -17,22 +17,32 @@ También funciona tal cual en GitHub Pages.
 
 | Modo | Vista | Apuntado |
 |------|-------|----------|
-| **[1] TÁCTICO** | Cenital, cámara sobre el mech | El torso gira hacia el cursor; los enemigos cercanos al cursor se fijan solos |
-| **[2] CABINA** | Primera persona, interior de cabina 3D | Ratón capturado: mueve torso (giro) y brazos (pitch) |
+| **[1] TÁCTICO** | Cenital, cámara sobre el mech | Flechas giran el torso (o el torso sigue al cursor si usas ratón) |
+| **[2] CABINA** | Primera persona, interior de cabina 3D | Flechas (o ratón capturado) mueven torso y mira |
 
 ### Controles
 
+Se puede jugar **solo con teclado** (el ratón es opcional).
+
 | Tecla | Acción |
 |-------|--------|
+| ↑ / ↓ + Enter (o 1 / 2) | Elegir modo en el menú |
 | W / S | Subir / bajar acelerador (marcha atrás limitada) |
 | A / D | Girar piernas |
+| ← / → | Girar torso |
+| ↑ / ↓ | Cabina: subir/bajar la mira · Táctico: alcance de la mira |
+| Q / Tab | Siguiente blanco (más cercano primero) y activa el seguimiento automático del torso |
+| R | Activar / desactivar el seguimiento del blanco |
+| Espacio / J | G1 — Láseres medios |
+| F / K | G2 — PPC |
+| E / L | G3 — Misiles LRM (guiados si hay blanco) |
 | X | Parar · C centrar torso |
-| Clic izq. | G1 — Láseres medios |
-| Clic der. | G2 — PPC |
-| Espacio / E | G3 — Misiles LRM (guiados si hay blanco fijado) |
-| Rueda | Zoom (modo táctico) |
 | T | Paleta CRT: color / ámbar / fósforo verde |
-| Esc / P | Pausa (M para volver al menú) |
+| Esc / P | Pausa (Enter continuar, M menú) |
+
+Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del torso se fija solo.
+
+**Con ratón (opcional):** en modo táctico el torso sigue al cursor; en cabina, clic para capturar el ratón y mirar. Clic izq. = G1, clic der. = G2, rueda = zoom (táctico). El juego cambia solo entre ratón y teclado según el último que uses para apuntar.
 
 ## Sistemas implementados
 
