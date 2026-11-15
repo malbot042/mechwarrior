@@ -115,17 +115,20 @@ export function drawRadar(g, cx, cy, r, origin, rot, blips, range, t, cone) {
   g.strokeStyle = C.dim; g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
 }
 
-export function drawWeapons(g, x, y, w, weapons, armor, rowH = 13, size = 10) {
+export function drawWeapons(g, x, y, w, weapons, armor, rowH = 13, size = 10, dist = 0) {
   const groups = ['G1', 'G2', 'G3'];
   weapons.forEach((wp, i) => {
     const yy = y + i * rowH;
     const dead = armor[wp.sec] <= 0;
     const ready = wp.cd <= 0;
-    const col = dead ? 'rgba(255,74,48,0.6)' : ready ? C.main : C.warn;
+    const far = dist > wp.def.range;
+    const col = dead ? 'rgba(255,74,48,0.6)' : far ? 'rgba(134,255,156,0.35)' : ready ? C.main : C.warn;
     txt(g, `${groups[wp.group]} ${wp.def.name}`, x, yy + size, { size, color: col, glow: 3 });
     const bx = x + w * 0.62, bw = w * 0.38;
     g.strokeStyle = col; g.strokeRect(bx + 0.5, yy + 2.5, bw - 1, size - 3);
-    if (!dead) {
+    if (!dead && far) {
+      txt(g, 'LEJOS', bx + bw / 2, yy + size - 1, { size: size - 2, align: 'center', color: C.warn, glow: 0 });
+    } else if (!dead) {
       const f = 1 - Math.max(0, wp.cd) / wp.def.cd;
       g.fillStyle = col; g.fillRect(bx + 2, yy + 4, (bw - 4) * f, size - 6);
     } else txt(g, 'DESTR', bx + bw / 2, yy + size - 1, { size: size - 2, align: 'center', color: C.bad, glow: 0 });

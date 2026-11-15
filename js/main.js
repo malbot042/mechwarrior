@@ -71,7 +71,7 @@ const state = {
   msgs: [],
   zoom: 260,          // altura fija de la cámara táctica (apertura máxima)
   input: 'keys',      // keys | mouse (último dispositivo usado para apuntar)
-  track: false,       // seguimiento automático del blanco
+  track: true,        // seguimiento automático del blanco (por defecto)
   aimDist: 120,
   menuSel: 0,
   training: false, trainArmed: false, showLessons: true, lessons: null, respawns: [],
@@ -228,7 +228,7 @@ function startGame(mode) {
   state.battle = null;
   if (state.training) startTraining();
   else startBattle();
-  state.track = false; state.aimDist = 120;
+  state.track = true; state.aimDist = 120; state.fireState = 'NOTARGET';
 }
 
 function applyMode() {
@@ -354,7 +354,7 @@ function kill(e) {
   if (state.battleMode) battleKill(e);
   if (e.isPlayer && state.battleMode) {
     state.ejected = true; state.deaths++;
-    state.flash = 0.6; state.target = null; state.track = false;
+    state.flash = 0.6; state.target = null;
     msg('MECH PERDIDO — ¡EYECCIÓN!', C.bad, 3);
     player.model.root.visible = true;
   } else if (e.isPlayer) {
@@ -456,8 +456,10 @@ function projectile(o) {
 function fireGroup(e, group, aimPoint, target) {
   if (e.shutdown > 0 || !e.alive) return false;
   let fired = false;
+  const dist = Math.hypot(aimPoint.x - e.pos.x, aimPoint.z - e.pos.z);
   for (const w of e.weapons) {
     if (w.group !== group || w.cd > 0 || e.armor[w.sec] <= 0) continue;
+    if (e.isPlayer && dist > w.def.range) continue;     // fuera de alcance: no se gasta calor
     fireWeapon(e, w, aimPoint, target);
     fired = true;
   }
@@ -605,19 +607,23 @@ function updateVisibility(dt) {
 const isVisible = (e) => e.alive && e.seenT !== undefined && state.time - e.seenT < VIS_GRACE;
 
 // ---------------------------------------------------------------- jugador
-// Control por teclado: flechas apuntan el torso, Q/Tab cicla blancos (y activa
-// el seguimiento automático del torso), R activa/desactiva el seguimiento.
-function cycleTarget() {
-  const list = entities.filter(e => e.alive && hostile(e, player) && isVisible(e))
-    .sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
+// Apuntado. Por defecto (state.track) el blanco es siempre el enemigo visible
+// más cercano y el torso lo sigue solo; Q/Tab o ←/→ pasan al siguiente o al
+// anterior. R cambia a apuntado manual (flechas o ratón).
+// Sólo se dispara con un blanco visible y el torso encarado hacia él.
+const visibleHostiles = () => entities.filter(e => e.alive && hostile(e, player) && isVisible(e))
+  .sort((a, b) => a.pos.distanceTo(player.pos) - b.pos.distanceTo(player.pos));
+function cycleTarget(dir = 1) {
+  const list = visibleHostiles();
   if (!list.length) { msg('SIN BLANCOS VISIBLES', C.dim, 1.2); return; }
   const i = list.indexOf(state.target);
-  state.target = list[(i + 1) % list.length];
+  state.target = list[i < 0 ? 0 : (i + dir + list.length) % list.length];
   lesson('target');
-  state.track = true;
   state.input = 'keys';
   sfx.beep(0.7, 1320);
 }
+const FIRE_ARC = 0.12;          // error máximo del torso (rad) para poder disparar
+const TORSO_LIMIT = 1.9;
 
 // gira el torso hacia una guiñada mundial con velocidad limitada
 function turnTorsoTo(p, worldYaw, rate, dt) {
@@ -638,67 +644,81 @@ function updatePlayer(dt) {
 
   const ax = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
   const ay = (keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0);
-  if (ax) state.track = false;
-  if (state.track && !(state.target && state.target.alive)) state.track = false;
-  if (state.target && !isVisible(state.target)) {
-    if (state.track) msg('BLANCO PERDIDO — SIN LÍNEA DE VISIÓN', C.warn, 1.5);
-    state.target = null; state.track = false;
-  }
   const powered = p.shutdown <= 0;
-
-  {
-    let aim = null, tgt = null;
-    if (state.input === 'mouse') {
-      // apuntar con el cursor
-      raycaster.setFromCamera(mouse.ndc, camera);
-      let best = 12;
-      let ground = pickGround(raycaster.ray);
-      const hits = raycaster.intersectObjects(world.obstacles.filter(o => o.alive).map(o => o.mesh), false);
-      const onObs = hits.length && hits[0].distance < ground.distanceTo(raycaster.ray.origin);
-      if (onObs) ground = hits[0].point.clone();
-      for (const e of entities) {
-        if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
-        const d = Math.hypot(e.pos.x - ground.x, e.pos.z - ground.z);
-        const onRay = raycaster.ray.intersectsSphere(new THREE.Sphere(center(e), 5.5));
-        const score = onRay ? 0 : d;
-        if (score < best) { best = score; tgt = e; }
-      }
-      aim = tgt ? center(tgt) : ground.clone().add(_v2.set(0, onObs ? 0 : 1.5, 0));
-      if (powered) turnTorsoTo(p, yawTo(p.pos, aim), 2.6, dt);
-    } else {
-      // apuntar con teclado
-      if (powered) p.torsoYaw = clamp(p.torsoYaw + ax * 1.7 * dt, -1.9, 1.9);
-      state.aimDist = clamp(state.aimDist + ay * 120 * dt, 15, 320);
-      if (state.track) {
-        tgt = state.target;
-        if (powered) turnTorsoTo(p, yawTo(p.pos, tgt.pos), 2.6, dt);
-      } else {
-        // fijación suave: enemigo dentro del cono del torso
-        const ty = p.heading + p.torsoYaw;
-        let best = 0.14;
-        for (const e of entities) {
-          if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
-          const ang = Math.abs(wrap(yawTo(p.pos, e.pos) - ty));
-          if (ang < best) { best = ang; tgt = e; }
-        }
-      }
-      if (tgt) aim = center(tgt);
-      else {
-        const f = fwd(p.heading + p.torsoYaw, _v2);
-        aim = V().set(p.pos.x + f.x * state.aimDist, 0, p.pos.z + f.z * state.aimDist);
-        aim.y = heightAt(aim.x, aim.z) + 1.5;
-      }
-    }
-    state.target = tgt;
-    state.aim.copy(aim);
-    p.pitch = 0;
+  if (state.target && !isVisible(state.target)) {
+    if (state.target.alive) msg('BLANCO PERDIDO — SIN LÍNEA DE VISIÓN', C.warn, 1.5);
+    state.target = null;
   }
-  if (keys.KeyC) { state.track = false; p.torsoYaw *= Math.max(0, 1 - dt * 5); p.pitch *= Math.max(0, 1 - dt * 5); }
+
+  let aim = null, tgt = state.target;
+  if (state.track) {
+    // seguimiento automático: si no hay blanco, el visible más cercano
+    if (!tgt) {
+      tgt = visibleHostiles()[0] ?? null;
+      if (tgt) sfx.beep(0.5, 1320);
+    }
+    if (tgt && powered) turnTorsoTo(p, yawTo(p.pos, tgt.pos), 2.6, dt);
+  } else if (state.input === 'mouse') {
+    // manual con ratón: el torso sigue al cursor; blanco = enemigo bajo el cursor
+    raycaster.setFromCamera(mouse.ndc, camera);
+    let best = 12;
+    let ground = pickGround(raycaster.ray);
+    const hits = raycaster.intersectObjects(world.obstacles.filter(o => o.alive).map(o => o.mesh), false);
+    if (hits.length && hits[0].distance < ground.distanceTo(raycaster.ray.origin)) ground = hits[0].point.clone();
+    tgt = null;
+    for (const e of entities) {
+      if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
+      const d = Math.hypot(e.pos.x - ground.x, e.pos.z - ground.z);
+      const score = raycaster.ray.intersectsSphere(new THREE.Sphere(center(e), 5.5)) ? 0 : d;
+      if (score < best) { best = score; tgt = e; }
+    }
+    aim = tgt ? center(tgt) : ground.clone().add(_v2.set(0, 1.5, 0));
+    if (powered) turnTorsoTo(p, yawTo(p.pos, aim), 2.6, dt);
+  } else {
+    // manual con teclado: flechas giran el torso; blanco = enemigo en el cono del torso
+    if (powered) p.torsoYaw = clamp(p.torsoYaw + ax * 1.7 * dt, -TORSO_LIMIT, TORSO_LIMIT);
+    state.aimDist = clamp(state.aimDist + ay * 120 * dt, 15, 320);
+    const ty = p.heading + p.torsoYaw;
+    let best = 0.14;
+    tgt = null;
+    for (const e of entities) {
+      if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
+      const ang = Math.abs(wrap(yawTo(p.pos, e.pos) - ty));
+      if (ang < best) { best = ang; tgt = e; }
+    }
+  }
+  if (!aim) {
+    if (tgt) aim = center(tgt);
+    else {
+      const f = fwd(p.heading + p.torsoYaw, _v2);
+      aim = V().set(p.pos.x + f.x * state.aimDist, 0, p.pos.z + f.z * state.aimDist);
+      aim.y = heightAt(aim.x, aim.z) + 1.5;
+    }
+  }
+  state.target = tgt;
+  state.aim.copy(aim);
+  p.pitch = 0;
+  if (keys.KeyC && !state.track) p.torsoYaw *= Math.max(0, 1 - dt * 5);
+
+  // estado de tiro: hace falta blanco visible y torso encarado
+  let fire = 'NOTARGET';
+  if (tgt) {
+    const want = yawTo(p.pos, tgt.pos);
+    const err = Math.abs(wrap(want - (p.heading + p.torsoYaw)));
+    const outOfArc = Math.abs(wrap(want - p.heading)) > TORSO_LIMIT + FIRE_ARC * 0.5;
+    fire = err < FIRE_ARC ? 'READY' : outOfArc ? 'ARC' : 'TURNING';
+  }
+  state.fireState = fire;
+  state.targetDist = tgt ? Math.hypot(tgt.pos.x - p.pos.x, tgt.pos.z - p.pos.z) : 0;
 
   // disparo (ratón o teclado)
-  if (mouse.b[0] || keys.Space || keys.KeyJ) fireGroup(p, 0, state.aim, state.target);
-  if (mouse.b[2] || keys.KeyF || keys.KeyK) fireGroup(p, 1, state.aim, state.target);
-  if (keys.KeyE || keys.KeyL) fireGroup(p, 2, state.aim, state.target);
+  const pressed = [mouse.b[0] || keys.Space || keys.KeyJ, mouse.b[2] || keys.KeyF || keys.KeyK, keys.KeyE || keys.KeyL];
+  if (fire === 'READY') {
+    pressed.forEach((on, grp) => { if (on) fireGroup(p, grp, state.aim, tgt); });
+  } else if (pressed.some(Boolean)) {
+    state.dryT = (state.dryT ?? 0) - dt;
+    if (state.dryT <= 0) { sfx.beep(0.35, 220); state.dryT = 0.5; }   // "clic" sin disparo
+  }
 }
 
 // ---------------------------------------------------------------- IA
@@ -975,24 +995,36 @@ function drawTopHud() {
   g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(lf.x, lf.y); g.stroke(); g.setLineDash([]);
   // cursor / retícula
   let mx = mouse.x * VW, my = mouse.y * VH;
-  if (state.input === 'keys') { const a = proj(state.aim); mx = a.x; my = a.y; }
-  const col = state.target ? C.bad : C.main;
+  if (state.track || state.input === 'keys') { const a = proj(state.aim); mx = a.x; my = a.y; }
+  const FS = {
+    READY: [C.main, 'FUEGO'], TURNING: [C.warn, 'GIRANDO TORSO'],
+    ARC: [C.bad, 'FUERA DE ARCO · GIRA LAS PIERNAS (A/D)'], NOTARGET: ['rgba(134,255,156,0.45)', 'SIN BLANCO VISIBLE'],
+  }[state.fireState ?? 'NOTARGET'];
+  const col = FS[0];
+  if (p.alive) txt(g, FS[1], mx, my + 24, { size: 8, align: 'center', color: col, glow: 2 });
+  // hacia dónde apunta el torso (las armas sólo disparan si coincide con el blanco)
+  if (p.alive) {
+    const tf = fwd(p.heading + p.torsoYaw, _v2);
+    const reach = state.target ? Math.min(state.targetDist, 260) : 60;
+    const tp = proj(_v1.set(p.pos.x + tf.x * reach, p.pos.y + 7, p.pos.z + tf.z * reach));
+    g.strokeStyle = col; g.globalAlpha = 0.5; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(tp.x, tp.y); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+  }
   g.strokeStyle = col; g.lineWidth = 1.5;
   g.beginPath(); g.arc(mx, my, 7, 0, Math.PI * 2); g.stroke();
   g.beginPath();
   g.moveTo(mx - 13, my); g.lineTo(mx - 4, my); g.moveTo(mx + 4, my); g.lineTo(mx + 13, my);
   g.moveTo(mx, my - 13); g.lineTo(mx, my - 4); g.moveTo(mx, my + 4); g.lineTo(mx, my + 13);
   g.stroke(); g.lineWidth = 1;
-  // línea torso -> cursor
-  g.strokeStyle = 'rgba(255,176,32,0.35)';
-  g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(mx, my); g.stroke();
 
   // paneles
   txt(g, state.training ? 'ENTRENAMIENTO' : `BATALLA · ${OBJ_NAME[state.battle?.mode] ?? ''}`, 12, 20, { size: 13, color: state.training ? C.cyan : C.main });
   txt(g, `PUNTOS ${String(state.score).padStart(6, '0')}`, 12, 36, { size: 11 });
   txt(g, `HOSTILES ${entities.filter(e => e.alive && hostile(e, player)).length}`, 12, 50, { size: 11, color: C.enemy });
-  if (state.track) txt(g, 'SEGUIMIENTO DE BLANCO [R]', 12, 66, { size: 10, color: C.cyan });
-  else if (state.input === 'keys') txt(g, `ALCANCE MIRA ${Math.round(state.aimDist)}m [↑↓]`, 12, 66, { size: 9, color: C.dim, glow: 0 });
+  if (state.track) txt(g, 'SEGUIMIENTO AUTOMÁTICO [R]', 12, 66, { size: 10, color: C.cyan });
+  else txt(g, 'APUNTADO MANUAL [R]', 12, 66, { size: 10, color: C.warn });
+  if (!state.track && state.input === 'keys') txt(g, `ALCANCE MIRA ${Math.round(state.aimDist)}m [↑↓]`, 12, 80, { size: 9, color: C.dim, glow: 0 });
 
   const R = 58;
   frame(g, VW - R * 2 - 18, 8, R * 2 + 10, R * 2 + 10, C.dim, 'RADAR 300m');
@@ -1003,7 +1035,7 @@ function drawTopHud() {
   drawDamage(g, 25, py + 5, 7.5, p.armor, p.maxArmor, state.time);
 
   frame(g, 126, py, 176, 92, C.dim, 'ARMAS');
-  drawWeapons(g, 132, py + 8, 164, p.weapons, p.armor, 15, 10);
+  drawWeapons(g, 132, py + 8, 164, p.weapons, p.armor, 15, 10, state.target ? state.targetDist : 0);
   txt(g, 'ESP/J G1 · F/K G2 · E/L G3', 132, py + 86, { size: 8, color: C.dim, glow: 0 });
 
   frame(g, VW - 160, py, 152, 92, C.dim, 'SISTEMAS');
@@ -1043,7 +1075,7 @@ function drawMenu() {
   });
   const lines = [
     'W/S ACELERADOR · A/D GIRAR PIERNAS · X PARAR · C CENTRAR TORSO',
-    'FLECHAS APUNTAR TORSO · Q/TAB SIGUIENTE BLANCO · R SEGUIMIENTO',
+    'EL TORSO SIGUE AL BLANCO MÁS CERCANO · Q/TAB/←→ CAMBIAR BLANCO · R MANUAL',
     'ESPACIO/J GRUPO 1 · F/K GRUPO 2 · E/L GRUPO 3',
     'V VISIÓN TÉRMICA · T PALETA CRT · ESC PAUSA',
     'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA',
@@ -1387,7 +1419,7 @@ function respawnPlayer() {
   player.name = 'LANZA-1';
   spawnAtBase(player, 'A');
   state.ejected = false;
-  state.target = null; state.track = false;
+  state.target = null;
   applyMode();
   sfx.powerup();
   msg('NUEVO MECH DESPLEGADO EN LA BASE', C.cyan, 3);
@@ -1709,7 +1741,7 @@ const LESSONS = [
   ['throttle', 'ACELERA', 'W / S'],
   ['turn', 'GIRA LAS PIERNAS', 'A / D'],
   ['torso', 'GIRA EL TORSO', '← → o ratón'],
-  ['target', 'FIJA UN BLANCO', 'Q / TAB'],
+  ['target', 'CAMBIA DE BLANCO', 'Q / ← →'],
   ['g0', 'DISPARA GRUPO 1', 'ESPACIO / J'],
   ['g1', 'DISPARA GRUPO 2', 'F / K'],
   ['g2', 'DISPARA GRUPO 3', 'E / L'],
@@ -2204,7 +2236,10 @@ window.addEventListener('keydown', (e) => {
   } else if (state.screen === 'hangar') {
     if (!e.repeat || e.code.startsWith('Arrow')) hangarKey(e.code);
   } else if (state.screen === 'play') {
-    if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
+    if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget(1);
+    // con seguimiento automático, ←/→ eligen el blanco anterior / siguiente
+    if (state.track && !e.repeat && e.code === 'ArrowRight') cycleTarget(1);
+    if (state.track && !e.repeat && e.code === 'ArrowLeft') cycleTarget(-1);
     if (e.code === 'KeyV' && !e.repeat) toggleThermal();
     if (state.battleMode && !e.repeat && ORDER_KEYS[e.code]) issueOrder(ORDER_KEYS[e.code]);
     if (state.training && !e.repeat) {
@@ -2213,9 +2248,9 @@ window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyN') { spawnTrainingTarget('static'); sfx.ui(); }
     }
     if (e.code === 'KeyR' && !e.repeat) {
-      if (state.track) state.track = false;
-      else if (state.target && state.target.alive) { state.track = true; state.input = 'keys'; }
-      else cycleTarget();
+      state.track = !state.track;
+      if (state.track) state.input = 'keys';
+      msg(state.track ? 'SEGUIMIENTO AUTOMÁTICO' : 'APUNTADO MANUAL', C.cyan, 1.5);
       sfx.ui();
     }
     if (e.code === 'Escape' || e.code === 'KeyP') state.screen = 'pause';

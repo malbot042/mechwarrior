@@ -26,7 +26,15 @@ También funciona tal cual en GitHub Pages.
 
 ### Vista
 
-El juego se juega en **vista táctica** (cenital): cámara fija a máxima apertura que se adelanta hacia donde apunta el torso. Flechas giran el torso (o el torso sigue al cursor si usas ratón); ↑↓ ajustan el alcance de la mira.
+El juego se juega en **vista táctica** (cenital): cámara fija a máxima apertura que se adelanta hacia donde apunta el torso.
+
+### Apuntado y disparo
+
+- **Seguimiento automático (modo por defecto)**: el blanco es siempre el **enemigo visible más cercano** y el torso gira solo hacia él. Se mantiene mientras siga visible; si cae o se pierde de vista, se fija automáticamente el siguiente más cercano. **Q / Tab** o **→** pasan al siguiente blanco (por distancia) y **←** al anterior.
+- **Sólo se dispara con el torso encarado a un blanco visible** (error menor de ~7°). Mientras el torso gira la retícula está en ámbar (*GIRANDO TORSO*) y las armas no disparan; en verde (*FUEGO*) sí. Si el blanco queda fuera del arco de giro del torso (±109° respecto a las piernas) aparece *FUERA DE ARCO · GIRA LAS PIERNAS*. Sin blanco no se dispara (*SIN BLANCO VISIBLE*); al intentarlo suena un clic seco.
+- **Alcance**: las armas cuyo alcance no llega al blanco no disparan (no gastan calor) y aparecen como *LEJOS* en el panel de armas.
+- Una línea discontinua desde tu mech indica hacia dónde apunta el torso, con el mismo color que la retícula.
+- **R** cambia a **apuntado manual**: las flechas giran el torso (↑↓ ajustan el alcance de la mira) o, con ratón, el torso sigue al cursor; el blanco es el enemigo visible que quede en el cono del torso o bajo el cursor. Las mismas reglas de disparo siguen aplicando.
 
 ### Visibilidad: sólo se fija lo que se ve
 
@@ -37,7 +45,7 @@ En todos los modos, un enemigo sólo se puede **fijar como blanco** (Q/Tab, fija
 3. hay **línea de visión** desde tu mech (edificios, colinas y otros mechs tapan),
 4. no está oculto en un bosque a más de 150 m (la térmica sí ve a través del follaje).
 
-Si el blanco deja de verse más de 0,6 s se pierde ("BLANCO PERDIDO"). Los enemigos en pantalla pero no visibles aparecen con un recuadro punteado y atenuado, y en el radar como un punto apagado: el radar sigue detectándolos, pero no puedes fijarlos. Siempre puedes disparar a mano hacia donde apuntes.
+Si el blanco deja de verse más de 0,6 s se pierde ("BLANCO PERDIDO"). Los enemigos en pantalla pero no visibles aparecen con un recuadro punteado y atenuado, y en el radar como un punto apagado: el radar sigue detectándolos, pero no puedes fijarlos.
 
 ### Entrenamiento
 
@@ -47,7 +55,7 @@ Modo libre para practicar sin presión:
 - **Dianas que reaparecen**: 3 dianas fijas cerca, 2 dianas móviles y un tanque. Cada diana destruida vuelve a aparecer a los 4 s; **N** crea una diana fija más.
 - **Blancos armados (O)**: por defecto las dianas no disparan; con O empiezan a devolver el fuego para practicar con presión real.
 - **Lecciones** que se marcan solas al hacerlas (I oculta/muestra el panel):
-  acelerar · girar piernas · girar torso · fijar blanco · disparar cada grupo · destruir una diana · superar el 70 % de calor · refrigerarse en el agua (si la zona tiene) · derribar un árbol (si hay bosque) · visión térmica.
+  acelerar · girar piernas · girar torso · cambiar de blanco · disparar cada grupo · destruir una diana · superar el 70 % de calor · refrigerarse en el agua (si la zona tiene) · derribar un árbol (si hay bosque) · visión térmica.
 - Usa el mismo hangar: puedes probar cualquier chasis, configuración, zona y hora.
 
 ### Batalla 5 vs 5
@@ -90,10 +98,10 @@ Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (ba
 | ↑ / ↓ + Enter (o 1 / 2) | Elegir modo en el menú |
 | W / S | Subir / bajar acelerador (marcha atrás limitada) |
 | A / D | Girar piernas |
-| ← / → | Girar torso |
-| ↑ / ↓ | Alcance de la mira |
-| Q / Tab | Siguiente blanco (más cercano primero) y activa el seguimiento automático del torso |
-| R | Activar / desactivar el seguimiento del blanco |
+| Q / Tab · → | Siguiente blanco (por distancia) |
+| ← | Blanco anterior |
+| R | Seguimiento automático (por defecto) ↔ apuntado manual |
+| ← / → · ↑ / ↓ | En apuntado manual: girar torso · alcance de la mira |
 | Espacio / J | Grupo de disparo G1 |
 | F / K | Grupo de disparo G2 |
 | E / L | Grupo de disparo G3 |
@@ -105,9 +113,8 @@ Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (ba
 | Z (mantener) | Batalla: eyección voluntaria |
 | O · N · I | Sólo entrenamiento: blancos armados · nueva diana · panel de lecciones |
 
-Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del torso se fija solo.
 
-**Con ratón (opcional):** el torso sigue al cursor. Clic izq. = G1, clic der. = G2. El juego cambia solo entre ratón y teclado según el último que uses para apuntar.
+**Con ratón (opcional):** clic izq. = G1, clic der. = G2. En apuntado manual (R) el torso sigue al cursor.
 
 ## Hangar
 
