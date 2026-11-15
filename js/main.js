@@ -5,6 +5,8 @@ import { createCRT } from './crt.js';
 import { buildWorld, heightAt, BOUND, mulberry32 } from './world.js';
 import { buildMech, buildTank, animateMech } from './models.js';
 import { buildCockpit } from './cockpit.js';
+import { buildHangar } from './hangar.js';
+import { WEAPONS, CHASSIS, MOUNTS, MOUNT_NAME, SLOT_NAME, HEATSINK_PER_TON, chassisById, optionsFor, usedTons, stats, defaultConfig, defaultGroup } from './data.js';
 import { C, txt, frame, drawDamage, drawRadar, drawWeapons, drawHeat, brackets } from './hud.js';
 import { initAudio, sfx, setHum } from './audio.js';
 
@@ -55,19 +57,12 @@ window.addEventListener('resize', resize);
 resize();
 
 // ---------------------------------------------------------------- datos
-const WEAPONS = {
-  laser:  { name: 'LÁSER M', heat: 3.5, cd: 0.55, dmg: 5, range: 240, type: 'beam', color: 0xff3020 },
-  laserS: { name: 'LÁSER L', heat: 2.0, cd: 0.45, dmg: 3, range: 160, type: 'beam', color: 0x30ff60 },
-  ppc:    { name: 'PPC',     heat: 10,  cd: 2.4,  dmg: 14, range: 320, type: 'bolt', speed: 280, color: 0x70d0ff },
-  lrm:    { name: 'LRM-6',   heat: 5,   cd: 4.0,  dmg: 2.6, range: 450, type: 'missile', count: 6, speed: 95 },
-  cannon: { name: 'AC/5',    heat: 1,   cd: 1.8,  dmg: 5,  range: 260, type: 'shell', speed: 210, color: 0xffcc66 },
-};
 const SECTIONS = ['LA', 'LT', 'CT', 'RT', 'RA', 'LEGS'];
 const SEC_NAME = { LA: 'BRAZO IZQ', LT: 'TORSO IZQ', CT: 'TORSO CEN', RT: 'TORSO DER', RA: 'BRAZO DER', LEGS: 'PIERNAS' };
 
 // ---------------------------------------------------------------- estado
 const state = {
-  screen: 'menu',     // menu | play | pause | dead
+  screen: 'menu',     // menu | hangar | play | pause | dead
   mode: 'top',        // top | cockpit
   palette: 0,
   wave: 0, score: 0, kills: 0,
@@ -105,19 +100,37 @@ function msg(text, color = C.main, dur = 3) { state.msgs.push({ text, color, t: 
 
 // ---------------------------------------------------------------- entidades
 function createMech(o) {
-  const model = buildMech(o.colors);
+  const sc = o.scale ?? 1;
+  const model = buildMech(o.colors, { loadout: o.loadout, scale: sc });
   scene.add(model.root);
   return {
-    kind: 'mech', name: o.name, model, isPlayer: !!o.isPlayer,
+    kind: 'mech', name: o.name, model, isPlayer: !!o.isPlayer, scale: sc,
     pos: V(), heading: 0, torsoYaw: 0, pitch: 0, throttle: 0, speed: 0,
-    maxSpeed: o.maxSpeed, turnRate: o.turnRate, heat: 0, dissip: o.dissip ?? 6,
+    maxSpeed: o.maxSpeed, baseSpeed: o.maxSpeed, turnRate: o.turnRate, heat: 0, dissip: o.dissip ?? 6,
     armor: { ...o.armor }, maxArmor: { ...o.armor },
     weapons: o.weapons.map(w => ({ ...w, def: WEAPONS[w.def], cd: Math.random() })),
-    alive: true, phase: 0, lastStep: 0, radius: 4, centerH: 7.2, shutdown: 0, deadT: 0,
+    alive: true, phase: 0, lastStep: 0, radius: 4 * sc, centerH: 7.2 * sc, hitR: 4.6 * sc, shutdown: 0, deadT: 0,
     ai: o.ai ? { range: o.ai.range, skill: o.ai.skill, t: 2, strafe: Math.random() < 0.5 ? 1 : -1, fireT: 1.5, stuck: 0, avoid: 0 } : null,
     value: o.value ?? 100,
   };
 }
+
+// Construye un mech a partir de un chasis y su configuración de armas
+function mechFromChassis(ch, cfg, o = {}) {
+  const loadout = {};
+  for (const m of MOUNTS) loadout[m] = cfg[m]?.w ?? null;
+  const st = stats(ch, cfg);
+  const armor = {};
+  for (const k in ch.armor) armor[k] = Math.round(ch.armor[k] * (o.armorMult ?? 1));
+  return createMech({
+    isPlayer: o.isPlayer, name: o.name ?? ch.name, colors: o.colors ?? ch.colors, scale: ch.scale, loadout,
+    maxSpeed: ch.maxSpeed * (o.speedMult ?? 1), turnRate: ch.turnRate, dissip: st.dissip, armor,
+    weapons: MOUNTS.filter(m => cfg[m]?.w).map(m => ({ def: cfg[m].w, mount: m, sec: m, group: cfg[m].g })),
+    ai: o.ai, value: o.value,
+  });
+}
+const quickCfg = (obj) => Object.fromEntries(MOUNTS.map(m => [m, { w: obj[m] ?? null, g: defaultGroup(obj[m]) }]));
+
 function createTank(o) {
   const model = buildTank(o.colors);
   scene.add(model.root);
@@ -134,37 +147,27 @@ function createTank(o) {
 }
 
 function newPlayer() {
-  return createMech({
-    isPlayer: true, name: 'HALCÓN-7',
-    colors: { base: 0x7d8068, dark: 0x30332c, accent: 0xc4561e, glass: 0x50ffd8 },
-    maxSpeed: 16, turnRate: 1.15, dissip: 7,
-    armor: { CT: 70, LT: 45, RT: 45, LA: 32, RA: 32, LEGS: 55 },
-    weapons: [
-      { def: 'laser', mount: 'la', sec: 'LA', group: 0 },
-      { def: 'laser', mount: 'rt', sec: 'RT', group: 0 },
-      { def: 'ppc', mount: 'ra', sec: 'RA', group: 1 },
-      { def: 'lrm', mount: 'lt', sec: 'LT', group: 2 },
-    ],
-  });
+  const ch = chassisById(hangar.chassis);
+  return mechFromChassis(ch, cfgFor(ch), { isPlayer: true });
 }
 const ENEMY_COLORS = [
   { base: 0x8a3a2a, dark: 0x2a1c18, accent: 0xd0c040, glass: 0xff6040 },
   { base: 0x4a5a6a, dark: 0x1c2228, accent: 0xd04040, glass: 0xff6040 },
+  { base: 0x3a3a3e, dark: 0x141416, accent: 0xff5020, glass: 0xff3020 },
 ];
-function enemyMech(heavy) {
-  return heavy
-    ? createMech({
-      name: 'MERODEADOR', colors: ENEMY_COLORS[1], maxSpeed: 11, turnRate: 0.8, dissip: 6, value: 160,
-      armor: { CT: 50, LT: 34, RT: 34, LA: 26, RA: 26, LEGS: 42 },
-      weapons: [{ def: 'laser', mount: 'la', sec: 'LA', group: 0 }, { def: 'ppc', mount: 'ra', sec: 'RA', group: 1 }, { def: 'lrm', mount: 'lt', sec: 'LT', group: 2 }],
-      ai: { range: 170, skill: 0.75 },
-    })
-    : createMech({
-      name: 'CHACAL', colors: ENEMY_COLORS[0], maxSpeed: 18, turnRate: 1.4, dissip: 6, value: 100,
-      armor: { CT: 32, LT: 22, RT: 22, LA: 16, RA: 16, LEGS: 28 },
-      weapons: [{ def: 'laserS', mount: 'la', sec: 'LA', group: 0 }, { def: 'laser', mount: 'rt', sec: 'RT', group: 0 }],
-      ai: { range: 90, skill: 0.55 },
-    });
+const ENEMY_TYPES = {
+  light: { ch: 'halcon', name: 'CHACAL', colors: 0, armorMult: 0.66, speedMult: 0.86, value: 100,
+    cfg: { LA: 'laserS', RT: 'laser' }, ai: { range: 90, skill: 0.55 } },
+  medium: { ch: 'centinela', name: 'MERODEADOR', colors: 1, armorMult: 0.72, speedMult: 0.72, value: 160,
+    cfg: { LA: 'laser', LT: 'lrm6', RA: 'ppc' }, ai: { range: 170, skill: 0.75 } },
+  heavy: { ch: 'titan', name: 'COLOSO', colors: 2, armorMult: 0.6, speedMult: 0.9, value: 250,
+    cfg: { LA: 'laserL', LT: 'lrm6', RT: 'srm4', RA: 'ac5' }, ai: { range: 140, skill: 0.7 } },
+};
+function enemyMech(type) {
+  const t = ENEMY_TYPES[type];
+  return mechFromChassis(chassisById(t.ch), quickCfg(t.cfg), {
+    name: t.name, colors: ENEMY_COLORS[t.colors], armorMult: t.armorMult, speedMult: t.speedMult, value: t.value, ai: t.ai,
+  });
 }
 
 function placeFree(e, x, z) {
@@ -183,11 +186,12 @@ function spawnWave() {
   state.wave++;
   const n = state.wave;
   const mechs = Math.min(1 + Math.floor((n - 1) / 2), 5);
-  const heavies = Math.min(Math.floor((n - 1) / 3), 3);
+  const mediums = Math.min(Math.floor((n - 1) / 3), 3);
+  const heavies = n >= 5 ? Math.min(Math.floor((n - 3) / 3), 2) : 0;
   const tanks = Math.min(1 + n, 7);
   const base = Math.random() * Math.PI * 2;
   const list = [];
-  for (let i = 0; i < mechs; i++) list.push(enemyMech(i < heavies));
+  for (let i = 0; i < mechs; i++) list.push(enemyMech(i < heavies ? 'heavy' : i < heavies + mediums ? 'medium' : 'light'));
   for (let i = 0; i < tanks; i++) list.push(createTank({ armor: 18 + n * 2 }));
   list.forEach((e, i) => {
     const a = base + (i / list.length - 0.5) * 1.6 + (Math.random() - 0.5) * 0.3;
@@ -253,7 +257,7 @@ function traceSegment(from, dir, maxDist, ignore) {
   const sph = new THREE.Sphere();
   for (const e of entities) {
     if (!e.alive || e === ignore) continue;
-    center(e, sph.center); sph.radius = e.kind === 'tank' ? 3.4 : 4.6;
+    center(e, sph.center); sph.radius = e.kind === 'tank' ? 3.4 : e.hitR;
     if (ray.intersectSphere(sph, _v3)) {
       const d = _v3.distanceTo(from);
       if (d < best) { best = d; ent = e; obs = null; }
@@ -276,11 +280,12 @@ function pickGround(r) {
 
 function hitSection(e, p) {
   if (e.kind === 'tank') return 'CT';
+  const k = e.scale ?? 1;
   const y = p.y - e.pos.y;
-  if (y < 5.6) return 'LEGS';
+  if (y < 5.6 * k) return 'LEGS';
   const ty = e.heading + e.torsoYaw;
   const x = (p.x - e.pos.x) * Math.cos(ty) - (p.z - e.pos.z) * Math.sin(ty);
-  let s = x < -2.9 ? 'LA' : x < -1.3 ? 'LT' : x < 1.3 ? 'CT' : x < 2.9 ? 'RT' : 'RA';
+  let s = x < -2.9 * k ? 'LA' : x < -1.3 * k ? 'LT' : x < 1.3 * k ? 'CT' : x < 2.9 * k ? 'RT' : 'RA';
   if (e.armor[s] <= 0) s = (s === 'LA' ? 'LT' : s === 'RA' ? 'RT' : 'CT');
   if (e.armor[s] <= 0) s = 'CT';
   return s;
@@ -309,7 +314,7 @@ function damage(e, amount, point, src) {
     state.flash = Math.min(0.25, state.flash + amount * 0.01);
     sfx.hit(0.9);
     if (src) state.hitDirs.push({ yaw: yawTo(e.pos, src.pos), t: 1.2 });
-    if (e.armor.LEGS <= e.maxArmor.LEGS * 0.5) e.maxSpeed = 16 * (0.45 + e.armor.LEGS / e.maxArmor.LEGS);
+    if (e.armor.LEGS <= e.maxArmor.LEGS * 0.5) e.maxSpeed = e.baseSpeed * (0.45 + e.armor.LEGS / e.maxArmor.LEGS);
   } else if (src === player) {
     sfx.hit(0.3);
   }
@@ -415,7 +420,8 @@ function projectile(o) {
     mesh.scale.set(0.35, 0.35, 1.2);
   } else {
     mesh = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: o.color, blending: THREE.AdditiveBlending, transparent: true }));
-    mesh.scale.set(o.type === 'bolt' ? 0.9 : 0.4, o.type === 'bolt' ? 0.9 : 0.4, o.type === 'bolt' ? 2.6 : 1.0);
+    const r = o.type === 'bolt' ? 0.9 : (o.size ?? 0.4);
+    mesh.scale.set(r, r, o.type === 'bolt' ? 2.6 : r * 2.5);
   }
   mesh.position.copy(o.pos);
   scene.add(mesh);
@@ -443,19 +449,21 @@ function fireWeapon(e, w, aimPoint, target) {
   const vol = volAt(M);
   if (d.type === 'beam') {
     const tr = traceSegment(M, dir, d.range, e);
-    beam(M, tr.point, d.color, d === WEAPONS.laserS ? 0.22 : 0.32);
+    beam(M, tr.point, d.color, d.width ?? 0.32);
     if (tr.ent) damage(tr.ent, d.dmg, tr.point, e);
     else if (tr.obs) damageObs(tr.obs, d.dmg, tr.point);
     else if (tr.dist < d.range) spark(tr.point, 0xff6030, 4);
     sfx.laser(vol * (e.isPlayer ? 0.8 : 0.6));
   } else if (d.type === 'bolt' || d.type === 'shell') {
-    projectile({ type: d.type, pos: M, vel: dir.multiplyScalar(d.speed), dmg: d.dmg, owner: e, color: d.color, life: d.range / d.speed + 0.3 });
+    projectile({ type: d.type, pos: M, vel: dir.multiplyScalar(d.speed), dmg: d.dmg, owner: e, color: d.color, size: d.size, life: d.range / d.speed + 0.3 });
     (d.type === 'bolt' ? sfx.ppc : sfx.cannon)(vol * 0.8);
     spark(M, d.color, 3);
   } else if (d.type === 'missile') {
     for (let i = 0; i < d.count; i++) {
-      const v = dir.clone().add(V().set((Math.random() - 0.5) * 0.5, 0.55 + Math.random() * 0.3, (Math.random() - 0.5) * 0.5)).normalize().multiplyScalar(d.speed * 0.5);
-      projectile({ type: 'missile', pos: M.clone().add(V().set((Math.random() - 0.5), (Math.random() - 0.5), 0)), vel: v, dmg: d.dmg, owner: e, target, aim: aimPoint.clone(), speed: d.speed, life: 6, delay: i * 0.07 });
+      const arc = d.guided ? 0.55 + Math.random() * 0.3 : 0.05 + Math.random() * 0.08;
+      const spr = d.guided ? 0.5 : 0.12;
+      const v = dir.clone().add(V().set((Math.random() - 0.5) * spr, arc, (Math.random() - 0.5) * spr)).normalize().multiplyScalar(d.speed * (d.guided ? 0.5 : 0.8));
+      projectile({ type: 'missile', pos: M.clone().add(V().set((Math.random() - 0.5), (Math.random() - 0.5), 0)), vel: v, dmg: d.dmg, owner: e, target: d.guided ? target : null, aim: aimPoint.clone(), speed: d.speed, life: d.guided ? 6 : d.range / d.speed + 0.5, delay: i * (d.guided ? 0.07 : 0.05) });
     }
     sfx.missile(vol);
   }
@@ -507,8 +515,8 @@ function moveEntity(e, dt) {
   m.root.rotation.y = e.heading;
   if (e.kind === 'mech') {
     m.torso.rotation.y = e.torsoYaw;
-    const amt = clamp(Math.abs(e.speed) / 12, 0, 1);
-    e.phase += e.speed * dt * 0.33;
+    const amt = clamp(Math.abs(e.speed) / (12 * e.scale), 0, 1);
+    e.phase += e.speed * dt * 0.33 / e.scale;
     animateMech(m, e.phase, amt, e.pitch);
     const step = Math.floor(e.phase / Math.PI);
     if (step !== e.lastStep) {
@@ -555,7 +563,7 @@ function updatePlayer(dt) {
     if (keys.KeyS) p.throttle = Math.max(-0.4, p.throttle - dt * 0.9);
     if (keys.KeyX) p.throttle = 0;
     const turn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
-    p.heading += turn * p.turnRate * dt * (1 - 0.35 * Math.abs(p.speed) / 16);
+    p.heading += turn * p.turnRate * dt * (1 - 0.35 * Math.abs(p.speed) / p.baseSpeed);
   }
   if (Math.abs(p.throttle) < 0.04 && !keys.KeyW && !keys.KeyS) p.throttle = 0;
 
@@ -760,7 +768,7 @@ function updateDead(e, dt) {
 // ---------------------------------------------------------------- cámara
 const camLook = V();
 function updateCamera(dt) {
-  if (state.screen === 'menu') {
+  if (state.screen === 'menu' || state.screen === 'hangar') {
     const t = state.time * 0.12;
     const c = player ? player.pos : V();
     camera.position.set(c.x + Math.sin(t) * 26, c.y + 9, c.z + Math.cos(t) * 26);
@@ -1047,6 +1055,7 @@ let menuRects = [];
 function drawHud() {
   g.clearRect(0, 0, VW, VH);
   if (state.screen === 'menu') { drawMenu(); return; }
+  if (state.screen === 'hangar') { drawHangar(); return; }
   if (state.mode === 'top' || state.screen === 'dead') drawTopHud(); else drawCockpitHud();
   drawMessages();
   if (player.shutdown > 0 && state.screen === 'play') {
@@ -1057,12 +1066,217 @@ function drawHud() {
   if (state.screen === 'pause') {
     g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(0, 0, VW, VH);
     txt(g, 'PAUSA', VW / 2, VH / 2 - 20, { size: 30, align: 'center' });
-    txt(g, 'ENTER / CLIC CONTINUAR  ·  M MENÚ PRINCIPAL', VW / 2, VH / 2 + 10, { size: 11, align: 'center', color: C.dim });
+    txt(g, 'ENTER / CLIC CONTINUAR  ·  H HANGAR  ·  M MENÚ', VW / 2, VH / 2 + 10, { size: 11, align: 'center', color: C.dim });
   }
   if (state.screen === 'dead') {
     g.fillStyle = 'rgba(30,0,0,0.35)'; g.fillRect(0, 0, VW, VH);
     txt(g, `OLEADA ${state.wave} · ${state.kills} DERRIBOS · ${state.score} PUNTOS`, VW / 2, VH / 2 + 30, { size: 13, align: 'center', color: C.white });
-    txt(g, 'ENTER PARA VOLVER AL MENÚ', VW / 2, VH / 2 + 52, { size: 11, align: 'center', color: C.dim });
+    txt(g, 'ENTER HANGAR  ·  M MENÚ PRINCIPAL', VW / 2, VH / 2 + 52, { size: 11, align: 'center', color: C.dim });
+  }
+}
+
+// ---------------------------------------------------------------- hangar
+const SAVE_KEY = 'steelhorizon.hangar.v1';
+const hangar = { chassis: 'centinela', cfgs: {}, row: 0 };
+const HROWS = MOUNTS.length + 2;   // chasis + monturas + desplegar
+try {
+  const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+  if (saved && saved.cfgs) { hangar.chassis = saved.chassis; hangar.cfgs = saved.cfgs; }
+} catch (_) { /* sin almacenamiento */ }
+
+function cfgFor(ch) {
+  let cfg = hangar.cfgs[ch.id];
+  const valid = cfg && MOUNTS.every(m => cfg[m] && (cfg[m].w === null || optionsFor(ch, m).includes(cfg[m].w)))
+    && usedTons(cfg) <= ch.weaponTons;
+  if (!valid) cfg = hangar.cfgs[ch.id] = defaultConfig(ch);
+  return cfg;
+}
+function saveHangar() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ chassis: hangar.chassis, cfgs: hangar.cfgs })); } catch (_) { /* ignorar */ }
+}
+
+const hangar3d = buildHangar();
+function refreshHangarModel() {
+  const ch = chassisById(hangar.chassis);
+  const cfg = cfgFor(ch);
+  const loadout = {};
+  for (const m of MOUNTS) loadout[m] = cfg[m].w;
+  hangar3d.setMech(ch.colors, loadout, ch.scale);
+}
+
+function enterHangar(mode) {
+  initAudio();
+  state.pendingMode = mode;
+  state.screen = 'hangar';
+  state.msgs = [];
+  hangar.row = 0;
+  cockpit.group.visible = false;
+  document.exitPointerLock?.();
+  refreshHangarModel();
+  sfx.ui();
+}
+
+function hangarChange(dir) {
+  const ch = chassisById(hangar.chassis);
+  if (hangar.row === 0) {
+    const i = CHASSIS.indexOf(ch);
+    hangar.chassis = CHASSIS[(i + dir + CHASSIS.length) % CHASSIS.length].id;
+  } else if (hangar.row <= MOUNTS.length) {
+    const m = MOUNTS[hangar.row - 1];
+    const cfg = cfgFor(ch);
+    const opts = optionsFor(ch, m);
+    const cur = opts.indexOf(cfg[m].w);
+    const curT = cfg[m].w ? WEAPONS[cfg[m].w].tons : 0;
+    for (let k = 1; k <= opts.length; k++) {
+      const cand = opts[((cur + dir * k) % opts.length + opts.length) % opts.length];
+      const t = cand ? WEAPONS[cand].tons : 0;
+      if (usedTons(cfg) - curT + t <= ch.weaponTons) { cfg[m] = { w: cand, g: defaultGroup(cand) }; break; }
+    }
+  } else return;
+  sfx.ui();
+  refreshHangarModel();
+  saveHangar();
+}
+function hangarGroup() {
+  const m = MOUNTS[hangar.row - 1];
+  if (!m) return;
+  const cfg = cfgFor(chassisById(hangar.chassis));
+  if (!cfg[m].w) return;
+  cfg[m].g = (cfg[m].g + 1) % 3;
+  sfx.ui(); saveHangar();
+}
+function hangarReset() {
+  const ch = chassisById(hangar.chassis);
+  hangar.cfgs[ch.id] = defaultConfig(ch);
+  sfx.beep(0.6, 520); refreshHangarModel(); saveHangar();
+}
+function deploy() {
+  saveHangar();
+  startGame(state.pendingMode || 'top');
+}
+
+let hangarRects = [];
+function bar(x, y, w, h, f, col = C.main) {
+  g.strokeStyle = C.dim; g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  g.fillStyle = col; g.fillRect(x + 2, y + 2, Math.max(0, (w - 4) * clamp(f, 0, 1)), h - 4);
+}
+function drawHangar() {
+  const ch = chassisById(hangar.chassis);
+  const cfg = cfgFor(ch);
+  const st = stats(ch, cfg);
+  const t = state.time;
+  hangarRects = [];
+  const sel = (r) => hangar.row === r;
+
+  txt(g, `HANGAR · ${state.pendingMode === 'cockpit' ? 'MODO CABINA' : 'MODO TÁCTICO'}`, VW / 2, 24, { size: 15, align: 'center' });
+  txt(g, 'CONFIGURACIÓN DEL MECH', VW / 2, 38, { size: 9, align: 'center', color: C.dim, glow: 0 });
+
+  // ---- panel izquierdo: chasis
+  const PW = 236, lx = 12, ly = 52;
+  frame(g, lx, ly, PW, 262, C.dim, 'CHASIS');
+  if (sel(0)) { g.fillStyle = 'rgba(134,255,156,0.10)'; g.fillRect(lx + 2, ly + 4, PW - 4, 44); }
+  const arrowCol = sel(0) ? C.white : C.dim;
+  txt(g, '◄', lx + 12, ly + 26, { size: 16, color: arrowCol });
+  txt(g, '►', lx + PW - 12, ly + 26, { size: 16, align: 'right', color: arrowCol });
+  txt(g, ch.name, lx + PW / 2, ly + 26, { size: 18, align: 'center', color: sel(0) ? C.white : C.main });
+  txt(g, `${ch.cls} · ${ch.tons} t · ${CHASSIS.indexOf(ch) + 1}/${CHASSIS.length}`, lx + PW / 2, ly + 41, { size: 9, align: 'center', color: C.warn, glow: 2 });
+  hangarRects.push({ x: lx, y: ly, w: PW, h: 48, row: 0, arrows: true });
+
+  const rows = [
+    ['VELOCIDAD', `${st.kph} KPH`, st.kph / 95],
+    ['BLINDAJE', `${st.armor}`, st.armor / 515],
+    ['DISIPACIÓN', `${st.dissip.toFixed(1)}/s`, st.dissip / 18],
+    ['DAÑO ALFA', `${st.alpha.toFixed(0)}`, st.alpha / 80],
+    ['DAÑO/SEG', `${st.dps.toFixed(1)}`, st.dps / 30],
+    ['CALOR ALFA', `${st.heat.toFixed(0)}`, st.heat / 40],
+  ];
+  rows.forEach(([k, v, f], i) => {
+    const y = ly + 66 + i * 26;
+    txt(g, k, lx + 10, y, { size: 9, glow: 2 });
+    txt(g, v, lx + PW - 10, y, { size: 10, align: 'right', color: C.white, glow: 2 });
+    bar(lx + 10, y + 4, PW - 20, 8, f, k === 'CALOR ALFA' && st.heat > st.dissip * 3 ? C.warn : C.main);
+  });
+  const secs = st.heat / st.dissip;
+  txt(g, `ALFA COMPLETA → ${secs.toFixed(1)} s PARA DISIPAR`, lx + 10, ly + 230, { size: 9, color: secs > 4 ? C.warn : C.dim, glow: 0 });
+  txt(g, `ALCANCE MÁX ${st.maxRange} m`, lx + 10, ly + 246, { size: 9, color: C.dim, glow: 0 });
+
+  // ---- panel derecho: armamento
+  const rx = VW - PW - 12, ry = 52;
+  frame(g, rx, ry, PW, 262, C.dim, 'ARMAMENTO');
+  MOUNTS.forEach((m, i) => {
+    const r = i + 1, y = ry + 6 + i * 44;
+    const w = cfg[m].w ? WEAPONS[cfg[m].w] : null;
+    if (sel(r)) { g.fillStyle = 'rgba(134,255,156,0.10)'; g.fillRect(rx + 2, y, PW - 4, 40); }
+    const slots = ch.hard[m].split('').map(c => c).join('/');
+    txt(g, `${MOUNT_NAME[m]}`, rx + 10, y + 12, { size: 9, color: C.dim, glow: 0 });
+    txt(g, `[${slots}]`, rx + PW - 10, y + 12, { size: 9, align: 'right', color: C.cyan, glow: 2 });
+    const col = sel(r) ? C.white : w ? C.main : C.dim;
+    txt(g, '◄', rx + 10, y + 31, { size: 12, color: sel(r) ? C.white : C.faint });
+    txt(g, w ? w.name : '— VACÍO —', rx + 26, y + 31, { size: 13, color: col });
+    if (w) txt(g, `${w.tons}t G${cfg[m].g + 1}`, rx + PW - 26, y + 31, { size: 10, align: 'right', color: C.warn, glow: 2 });
+    txt(g, '►', rx + PW - 10, y + 31, { size: 12, align: 'right', color: sel(r) ? C.white : C.faint });
+    hangarRects.push({ x: rx, y, w: PW, h: 40, row: r, arrows: true });
+  });
+  // detalle del arma seleccionada
+  const sm = MOUNTS[hangar.row - 1];
+  const sw = sm && cfg[sm].w ? WEAPONS[cfg[sm].w] : null;
+  const dy = ry + 186;
+  g.strokeStyle = C.faint; g.beginPath(); g.moveTo(rx + 8, dy - 6); g.lineTo(rx + PW - 8, dy - 6); g.stroke();
+  if (sw) {
+    const dmg = sw.count ? `${sw.dmg}×${sw.count}` : `${sw.dmg}`;
+    txt(g, `${sw.name} · ${SLOT_NAME[sw.slot]}${sw.guided ? ' · GUIADO' : ''}`, rx + 10, dy + 8, { size: 10, color: C.white, glow: 2 });
+    txt(g, `DAÑO ${dmg}   CALOR ${sw.heat}   RECARGA ${sw.cd}s`, rx + 10, dy + 24, { size: 9, glow: 1 });
+    txt(g, `ALCANCE ${sw.range}m   PESO ${sw.tons}t`, rx + 10, dy + 38, { size: 9, glow: 1 });
+    txt(g, 'G CAMBIA GRUPO DE DISPARO', rx + 10, dy + 56, { size: 8, color: C.dim, glow: 0 });
+  } else if (sm) {
+    txt(g, `MONTURA ${ch.hard[sm].split('').map(c => SLOT_NAME[c]).join(' / ')}`, rx + 10, dy + 8, { size: 9, color: C.dim, glow: 0 });
+  } else {
+    txt(g, 'E ENERGÍA · B BALÍSTICA · M MISILES', rx + 10, dy + 8, { size: 9, color: C.dim, glow: 0 });
+    txt(g, 'TONELAJE LIBRE = DISIPADORES EXTRA', rx + 10, dy + 24, { size: 9, color: C.dim, glow: 0 });
+  }
+
+  // ---- carga de armas
+  const bw = Math.min(420, VW - 40), bx = VW / 2 - bw / 2, by = VH - 112;
+  txt(g, `CARGA DE ARMAS  ${st.tons} / ${ch.weaponTons} t`, bx, by - 6, { size: 11 });
+  txt(g, st.free > 0 ? `${st.free} t LIBRES → +${(st.free * HEATSINK_PER_TON).toFixed(1)} DISIPACIÓN` : 'CARGA COMPLETA', bx + bw, by - 6, { size: 9, align: 'right', color: st.free > 0 ? C.cyan : C.warn, glow: 2 });
+  const seg = bw / ch.weaponTons;
+  for (let i = 0; i < ch.weaponTons; i++) {
+    g.fillStyle = i < st.tons ? C.main : 'rgba(95,224,255,0.25)';
+    g.fillRect(bx + i * seg + 1, by, Math.max(1, seg - 2), 12);
+  }
+
+  // ---- botón desplegar
+  const dr = HROWS - 1, dw = 240, dx = VW / 2 - dw / 2, dyb = VH - 82;
+  const on = sel(dr);
+  frame(g, dx, dyb, dw, 34, on ? C.main : C.dim);
+  if (on && Math.sin(t * 6) > -0.2) { g.fillStyle = 'rgba(134,255,156,0.16)'; g.fillRect(dx, dyb, dw, 34); }
+  txt(g, '▶ DESPLEGAR  [ENTER]', VW / 2, dyb + 22, { size: 14, align: 'center', color: on ? C.white : C.main });
+  hangarRects.push({ x: dx, y: dyb, w: dw, h: 34, row: dr, deploy: true });
+
+  txt(g, '↑↓ ELEGIR · ←→ CAMBIAR · G GRUPO · R RESTABLECER · ENTER DESPLEGAR · ESC MENÚ', VW / 2, VH - 22, { size: 9, align: 'center', color: C.dim, glow: 0 });
+}
+
+function hangarKey(code) {
+  if (code === 'ArrowUp' || code === 'KeyW') { hangar.row = (hangar.row - 1 + HROWS) % HROWS; sfx.ui(); }
+  else if (code === 'ArrowDown' || code === 'KeyS' || code === 'Tab') { hangar.row = (hangar.row + 1) % HROWS; sfx.ui(); }
+  else if (code === 'ArrowLeft' || code === 'KeyA') hangarChange(-1);
+  else if (code === 'ArrowRight' || code === 'KeyD') hangarChange(1);
+  else if (code === 'KeyG') hangarGroup();
+  else if (code === 'KeyR') hangarReset();
+  else if (code === 'Enter' || (code === 'Space' && hangar.row === HROWS - 1)) deploy();
+  else if (code === 'Escape' || code === 'Backspace') toMenu();
+}
+function hangarClick(x, y) {
+  for (const r of hangarRects) {
+    if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue;
+    hangar.row = r.row;
+    if (r.deploy) { deploy(); return; }
+    if (r.arrows) {
+      if (x < r.x + r.w * 0.3) hangarChange(-1);
+      else if (x > r.x + r.w * 0.7) hangarChange(1);
+      else sfx.ui();
+    }
+    return;
   }
 }
 
@@ -1092,7 +1306,7 @@ function frameLoop(now) {
         for (const k of ['LA', 'RA']) if (player.armor[k] > 0) player.model.sections[k].visible = true;
         if (player.armor.LT > 0) player.model.sideL.visible = true;
         if (player.armor.RT > 0) player.model.sideR.visible = true;
-        player.maxSpeed = 16 * (player.armor.LEGS < player.maxArmor.LEGS * 0.5 ? 0.45 + player.armor.LEGS / player.maxArmor.LEGS : 1);
+        player.maxSpeed = player.baseSpeed * (player.armor.LEGS < player.maxArmor.LEGS * 0.5 ? 0.45 + player.armor.LEGS / player.maxArmor.LEGS : 1);
       }
       state.waveTimer -= dt;
       if (state.waveTimer <= 0) spawnWave();
@@ -1133,7 +1347,10 @@ function frameLoop(now) {
   u.uStatic.value = player && player.shutdown > 0 && state.screen === 'play' ? 0.25 : (state.screen === 'dead' ? 0.12 : 0);
 
   renderer.setRenderTarget(rt);
-  renderer.render(scene, camera);
+  if (state.screen === 'hangar') {
+    hangar3d.update(dt, camera.aspect, chassisById(hangar.chassis).scale);
+    renderer.render(hangar3d.scene, hangar3d.camera);
+  } else renderer.render(scene, camera);
   crt.render();
 }
 
@@ -1154,10 +1371,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code.startsWith('Arrow')) state.input = 'keys';
   if (e.code === 'KeyT') { state.palette = (state.palette + 1) % 3; sfx.ui(); }
   if (state.screen === 'menu') {
-    if (e.code === 'Digit1' || e.code === 'Numpad1') startGame('top');
-    if (e.code === 'Digit2' || e.code === 'Numpad2') startGame('cockpit');
+    if (e.code === 'Digit1' || e.code === 'Numpad1') enterHangar('top');
+    if (e.code === 'Digit2' || e.code === 'Numpad2') enterHangar('cockpit');
     if (['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS'].includes(e.code)) { state.menuSel = 1 - state.menuSel; sfx.ui(); }
-    if (e.code === 'Enter' || e.code === 'Space') startGame(state.menuSel === 0 ? 'top' : 'cockpit');
+    if (e.code === 'Enter' || e.code === 'Space') enterHangar(state.menuSel === 0 ? 'top' : 'cockpit');
+  } else if (state.screen === 'hangar') {
+    if (!e.repeat || e.code.startsWith('Arrow')) hangarKey(e.code);
   } else if (state.screen === 'play') {
     if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
     if (e.code === 'KeyR' && !e.repeat) {
@@ -1170,8 +1389,10 @@ window.addEventListener('keydown', (e) => {
   } else if (state.screen === 'pause') {
     if (e.code === 'Enter' || e.code === 'KeyP') resume();
     if (e.code === 'KeyM') toMenu();
+    if (e.code === 'KeyH') { clearWorld(); setupMenuScene(); enterHangar(state.mode); }
   } else if (state.screen === 'dead') {
-    if (e.code === 'Enter') toMenu();
+    if (e.code === 'Enter') { clearWorld(); setupMenuScene(); enterHangar(state.mode); }
+    if (e.code === 'KeyM') toMenu();
   }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -1210,9 +1431,10 @@ cv.addEventListener('mousedown', (e) => {
   initAudio();
   if (state.screen === 'menu') {
     const x = mouse.x * VW, y = mouse.y * VH;
-    for (const r of menuRects) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) startGame(r.mode);
+    for (const r of menuRects) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) enterHangar(r.mode);
     return;
   }
+  if (state.screen === 'hangar') { hangarClick(mouse.x * VW, mouse.y * VH); return; }
   if (state.screen === 'pause') { resume(); return; }
   if (state.screen === 'play' && state.mode === 'cockpit' && document.pointerLockElement !== cv) {
     lockPointer();
@@ -1230,4 +1452,4 @@ document.addEventListener('pointerlockchange', () => {
 setupMenuScene();
 requestAnimationFrame(frameLoop);
 // acceso para depuración
-window.__game = { state, get player() { return player; }, get entities() { return entities; }, startGame };
+window.__game = { state, hangar, get player() { return player; }, get entities() { return entities; }, startGame, enterHangar };
