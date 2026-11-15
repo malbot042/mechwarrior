@@ -4,7 +4,6 @@ import * as THREE from 'three';
 import { createCRT } from './crt.js';
 import { buildWorld, heightAt, BOUND, waterLevel, ZONES, TIMES, HEAT } from './world.js';
 import { buildMech, buildTank, buildTruck, animateMech } from './models.js';
-import { buildCockpit } from './cockpit.js';
 import { buildHangar } from './hangar.js';
 import { WEAPONS, CHASSIS, MOUNTS, MOUNT_NAME, SLOT_NAME, HEATSINK_PER_TON, chassisById, optionsFor, usedTons, stats, defaultConfig, defaultGroup } from './data.js';
 import { C, txt, frame, drawDamage, drawRadar, drawWeapons, drawHeat, brackets } from './hud.js';
@@ -32,7 +31,7 @@ crt.uniforms.tScene.value = rt.texture;
 crt.uniforms.tHud.value = hudTex;
 
 const scene = new THREE.Scene();
-const FOV_COCKPIT = 70, FOV_TOP = 40;
+const FOV_TOP = 40;
 const camera = new THREE.PerspectiveCamera(FOV_TOP, 16 / 9, 0.05, 1400);
 scene.add(camera);
 let world = buildWorld(scene, 'desierto', 'dusk');
@@ -41,10 +40,6 @@ function ensureWorld(zone, time) {
   world.dispose();
   world = buildWorld(scene, zone, time);
 }
-const cockpit = buildCockpit();
-camera.add(cockpit.group);
-cockpit.group.userData.keep = true; // la cabina no se ve en térmico
-cockpit.group.visible = false;
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -57,7 +52,6 @@ function resize() {
   camera.updateProjectionMatrix();
   crt.uniforms.uRes.value.set(VW, VH);
   crt.uniforms.uOut.value.set(w * renderer.getPixelRatio(), h * renderer.getPixelRatio());
-  cockpit.layout(camera.aspect, FOV_COCKPIT);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -69,7 +63,7 @@ const SEC_NAME = { LA: 'BRAZO IZQ', LT: 'TORSO IZQ', CT: 'TORSO CEN', RT: 'TORSO
 // ---------------------------------------------------------------- estado
 const state = {
   screen: 'menu',     // menu | hangar | play | pause | dead
-  mode: 'top',        // top | cockpit
+  mode: 'top',        // vista táctica (única)
   palette: 0,
   wave: 0, score: 0, kills: 0,
   waveTimer: 0, time: 0,
@@ -90,7 +84,7 @@ let player = null;
 const projectiles = [], beams = [], particles = [];
 
 const keys = {};
-const mouse = { x: 0.5, y: 0.5, ndc: new THREE.Vector2(), b: [false, false, false], dx: 0, dy: 0, sdx: 0, sdy: 0 };
+const mouse = { x: 0.5, y: 0.5, ndc: new THREE.Vector2(), b: [false, false, false] };
 
 // ---------------------------------------------------------------- utilidades
 const V = () => new THREE.Vector3();
@@ -214,7 +208,7 @@ function startGame(mode) {
   initAudio();
   sfx.powerup();
   clearWorld();
-  state.mode = mode;
+  state.mode = 'top';
   state.score = 0; state.kills = 0; state.msgs = [];
   state.target = null; state.hitDirs = [];
   ensureWorld(hangar.zone, hangar.time);
@@ -229,7 +223,6 @@ function startGame(mode) {
   entities.push(player);
   state.screen = 'play';
   applyMode();
-  if (mode === 'cockpit') lockPointer();
   state.thermal = false;
   if (world.time === 'night') setTimeout(() => msg('VISIBILIDAD NOCTURNA — PULSE V PARA VISIÓN TÉRMICA', C.warn, 5), 1200);
   state.battle = null;
@@ -239,13 +232,11 @@ function startGame(mode) {
 }
 
 function applyMode() {
-  const cock = state.mode === 'cockpit' && state.screen !== 'menu' && !state.ejected;
-  cockpit.group.visible = cock;
-  if (player) player.model.root.visible = !cock;
-  camera.fov = cock ? FOV_COCKPIT : FOV_TOP;
-  camera.near = cock ? 0.05 : 1;
+  if (player) player.model.root.visible = true;
+  camera.fov = FOV_TOP;
+  camera.near = 1;
   camera.updateProjectionMatrix();
-  setHum(cock ? 0.05 : 0.015);
+  setHum(0.015);
 }
 
 // ---------------------------------------------------------------- trazado y daño
@@ -365,14 +356,11 @@ function kill(e) {
     state.ejected = true; state.deaths++;
     state.flash = 0.6; state.target = null; state.track = false;
     msg('MECH PERDIDO — ¡EYECCIÓN!', C.bad, 3);
-    cockpit.group.visible = false;
     player.model.root.visible = true;
   } else if (e.isPlayer) {
     state.screen = 'dead';
     state.flash = 0.8;
     msg('MECH DESTRUIDO', C.bad, 99);
-    document.exitPointerLock?.();
-    cockpit.group.visible = false;
     player.model.root.visible = true;
   } else if (state.battleMode && e.kind === 'convoy') {
     msg(`¡${e.name} DEL CONVOY DESTRUIDO!`, C.bad, 3);
@@ -571,10 +559,9 @@ function moveEntity(e, dt) {
     if (step !== e.lastStep) {
       e.lastStep = step;
       if (amt > 0.15) {
-        const v = e.isPlayer ? (state.mode === 'cockpit' ? 0.8 : 0.45) : volAt(e.pos) * 0.5;
+        const v = e.isPlayer ? 0.45 : volAt(e.pos) * 0.5;
         sfx.step(v * amt);
         if (e.inWater) splash(_v3.set(e.pos.x, waterLevel(), e.pos.z), 6, v);
-        if (e.isPlayer && state.mode === 'cockpit') state.shake = Math.min(1, state.shake + 0.12 * amt);
       }
     }
   } else {
@@ -659,7 +646,7 @@ function updatePlayer(dt) {
   }
   const powered = p.shutdown <= 0;
 
-  if (state.mode === 'top') {
+  {
     let aim = null, tgt = null;
     if (state.input === 'mouse') {
       // apuntar con el cursor
@@ -705,36 +692,6 @@ function updatePlayer(dt) {
     state.target = tgt;
     state.aim.copy(aim);
     p.pitch = 0;
-  } else {
-    // cabina: ratón y/o flechas mueven torso y pitch
-    if (powered) {
-      p.torsoYaw = clamp(p.torsoYaw - mouse.dx * 0.0022 + ax * 1.5 * dt, -1.9, 1.9);
-      p.pitch = clamp(p.pitch - mouse.dy * 0.0022 + (state.track ? 0 : ay * 0.8 * dt), -0.45, 0.35);
-      if (ax || ay) { mouse.sdx -= ax * 8; mouse.sdy -= ay * 8; }
-    }
-    const cp = camera.getWorldPosition(V());
-    if (state.track && powered) {
-      const tc = center(state.target);
-      turnTorsoTo(p, yawTo(p.pos, tc), 2.2, dt);
-      const desiredPitch = clamp(Math.atan2(tc.y - cp.y, Math.hypot(tc.x - cp.x, tc.z - cp.z)), -0.45, 0.35);
-      p.pitch += clamp(desiredPitch - p.pitch, -1.2 * dt, 1.2 * dt);
-    }
-    const cd = camera.getWorldDirection(V());
-    const tr = traceSegment(cp, cd, 600, p);
-    state.aim.copy(tr.point);
-    if (!state.track) {
-      // fijación de blanco: el enemigo más cercano al centro de la vista
-      let tgt = null, best = 0.12;
-      for (const e of entities) {
-        if (!e.alive || !hostile(e, p) || !isVisible(e)) continue;
-        const to = center(e).sub(cp);
-        if (to.length() > 500) continue;
-        const ang = to.normalize().angleTo(cd);
-        if (ang < best) { best = ang; tgt = e; }
-      }
-      if (tgt) state.target = tgt;
-      else if (state.target && (!state.target.alive || center(state.target).sub(cp).normalize().angleTo(cd) > 0.6)) state.target = null;
-    }
   }
   if (keys.KeyC) { state.track = false; p.torsoYaw *= Math.max(0, 1 - dt * 5); p.pitch *= Math.max(0, 1 - dt * 5); }
 
@@ -923,15 +880,7 @@ function updateCamera(dt) {
   const shake = state.shake;
   const pod = state.ejected ? playerPod() : null;
   const focus = pod ? pod.mesh.position : p.pos;
-  if (pod && state.mode === 'cockpit' && state.screen !== 'result') {
-    // cámara de persecución detrás de la cápsula de eyección
-    const y = pod.mesh.rotation.y;
-    camLook.lerp(_v1.set(focus.x + Math.sin(y) * 18, focus.y + 7, focus.z + Math.cos(y) * 18), Math.min(1, dt * 3));
-    camera.position.copy(camLook);
-    camera.lookAt(focus.x, focus.y + 1, focus.z);
-    return;
-  }
-  if (state.mode === 'top' || state.screen === 'dead' || state.screen === 'result' || pod) {
+  {
     const z = state.zoom;
     // anticipación: la cámara se adelanta hacia donde apunta el torso
     const ahead = pod || !p.alive ? 0 : 45;
@@ -940,14 +889,6 @@ function updateCamera(dt) {
     camera.position.set(camLook.x, camLook.y + z, camLook.z + z * 0.42);
     camera.lookAt(camLook);
     if (shake > 0) camera.position.add(_v1.set((Math.random() - 0.5) * shake * 2, 0, (Math.random() - 0.5) * shake * 2));
-  } else {
-    p.model.root.updateMatrixWorld(true);
-    p.model.cockpit.getWorldPosition(camera.position);
-    const amt = clamp(Math.abs(p.speed) / 12, 0, 1);
-    const bobY = Math.abs(Math.cos(p.phase)) * 0.25 * amt;
-    camera.position.y += -bobY + (Math.random() - 0.5) * shake * 0.25;
-    camera.position.x += (Math.random() - 0.5) * shake * 0.2;
-    camera.rotation.set(p.pitch + (Math.random() - 0.5) * shake * 0.02, p.heading + p.torsoYaw, Math.sin(p.phase) * 0.012 * amt, 'YXZ');
   }
 }
 
@@ -1080,145 +1021,6 @@ function drawTopHud() {
   txt(g, `TORSO ${Math.round(THREE.MathUtils.radToDeg(p.torsoYaw))}°`, VW - 16, py + 82, { size: 9, align: 'right' });
 }
 
-function drawCockpitHud() {
-  const p = player;
-  const cx = VW / 2, cy = VH * 0.42;
-  // marcadores de enemigos
-  for (const e of entities) {
-    if (!e.alive || e.isPlayer) continue;
-    const c = center(e);
-    const s = proj(c);
-    if (!s.ok || s.x < 0 || s.x > VW || s.y < 0 || s.y > VH) continue;
-    const d = c.distanceTo(camera.position);
-    if (!hostile(e, p)) { allyMarker(e, s.x, s.y - clamp(1600 / d, 8, 90) * 0.6, d < 220); continue; }
-    if (!isVisible(e)) continue;
-    const w = clamp(1600 / d, 8, 90) * (e.kind === 'tank' ? 0.7 : 1);
-    const isT = e === state.target;
-    brackets(g, s.x - w / 2, s.y - w / 2, w, w, isT ? C.white : 'rgba(255,90,64,0.85)', Math.max(3, w * 0.2));
-    if (isSquadTarget(e)) squadTag(s.x, s.y - w / 2 - 10);
-    if (isT) {
-      txt(g, `${e.name}`, s.x + w / 2 + 4, s.y - w / 2 + 8, { size: 9, color: C.white, glow: 3 });
-      txt(g, `${Math.round(d)}m`, s.x + w / 2 + 4, s.y - w / 2 + 19, { size: 9, color: C.white, glow: 3 });
-      if (Math.sin(state.time * 8) > -0.3) txt(g, state.track ? 'SEGUIMIENTO' : 'BLOQUEO', s.x, s.y + w / 2 + 11, { size: 9, align: 'center', color: state.track ? C.cyan : C.bad });
-    }
-  }
-  // punto de convergencia del arma (proyección del punto de mira)
-  const a = proj(state.aim);
-  // retícula central
-  const col = state.target ? C.bad : C.main;
-  g.strokeStyle = col; g.lineWidth = 1.5;
-  g.beginPath(); g.arc(cx, cy, 16, -0.4, 0.4); g.stroke();
-  g.beginPath(); g.arc(cx, cy, 16, Math.PI - 0.4, Math.PI + 0.4); g.stroke();
-  g.beginPath();
-  g.moveTo(cx - 30, cy); g.lineTo(cx - 20, cy); g.moveTo(cx + 20, cy); g.lineTo(cx + 30, cy);
-  g.moveTo(cx, cy - 26); g.lineTo(cx, cy - 18); g.moveTo(cx, cy + 18); g.lineTo(cx, cy + 26);
-  g.stroke();
-  g.fillStyle = col; g.fillRect(cx - 1, cy - 1, 2, 2);
-  if (a.ok) { g.strokeStyle = 'rgba(255,176,32,0.7)'; g.strokeRect(a.x - 3, a.y - 3, 6, 6); }
-  g.lineWidth = 1;
-
-  // brújula superior
-  const yaw = p.heading + p.torsoYaw;
-  const bearing = ((-THREE.MathUtils.radToDeg(yaw)) % 360 + 360) % 360;
-  const bw = 260, bx = cx - bw / 2, by = 22;
-  g.fillStyle = 'rgba(0,12,4,0.45)'; g.fillRect(bx, by - 12, bw, 22);
-  g.save(); g.beginPath(); g.rect(bx, by - 14, bw, 26); g.clip();
-  for (let d = Math.floor((bearing - 60) / 5) * 5; d <= bearing + 60; d += 5) {
-    const x = cx + (d - bearing) * (bw / 120);
-    const dd = ((d % 360) + 360) % 360;
-    g.strokeStyle = C.dim; g.beginPath(); g.moveTo(x, by + 8); g.lineTo(x, by + (dd % 15 === 0 ? 0 : 4)); g.stroke();
-    if (dd % 45 === 0) txt(g, { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SO', 270: 'O', 315: 'NO' }[dd], x, by - 2, { size: 9, align: 'center', glow: 3 });
-  }
-  // marcador de piernas en la brújula
-  const legB = ((-THREE.MathUtils.radToDeg(p.heading)) % 360 + 360) % 360;
-  let ld = legB - bearing; if (ld > 180) ld -= 360; if (ld < -180) ld += 360;
-  const lx = cx + clamp(ld, -60, 60) * (bw / 120);
-  g.fillStyle = C.warn; g.beginPath(); g.moveTo(lx, by + 9); g.lineTo(lx - 4, by + 15); g.lineTo(lx + 4, by + 15); g.closePath(); g.fill();
-  g.restore();
-  txt(g, String(Math.round(bearing)).padStart(3, '0'), cx, by + 24, { size: 10, align: 'center', color: C.white });
-
-  // indicador de giro de torso
-  const tyw = 140, tyx = cx - tyw / 2, tyy = cy + 46;
-  g.strokeStyle = C.dim; g.beginPath(); g.moveTo(tyx, tyy); g.lineTo(tyx + tyw, tyy); g.stroke();
-  const tp = cx + (p.torsoYaw / 1.9) * (-tyw / 2);
-  g.fillStyle = C.warn; g.fillRect(cx - 1, tyy - 4, 2, 8);
-  g.fillStyle = C.main; g.fillRect(tp - 3, tyy - 3, 6, 6);
-
-  // escala de pitch
-  for (let k = -2; k <= 2; k++) {
-    const yy = cy + (p.pitch * 180 / Math.PI - k * 10) * 3;
-    if (k === 0 || yy < cy - 70 || yy > cy + 70) continue;
-    g.strokeStyle = C.faint; g.beginPath(); g.moveTo(cx - 70, yy); g.lineTo(cx - 50, yy); g.moveTo(cx + 50, yy); g.lineTo(cx + 70, yy); g.stroke();
-  }
-
-  // acelerador y calor (laterales del parabrisas)
-  const bh = 120, byy = cy - bh / 2;
-  const lx2 = VW * 0.22;
-  g.strokeStyle = C.dim; g.strokeRect(lx2 + 0.5, byy + 0.5, 10, bh);
-  const zeroY = byy + bh * (1 / 1.4);
-  const th = p.throttle / 1.4 * bh;
-  g.fillStyle = p.throttle < 0 ? C.warn : C.main;
-  g.fillRect(lx2 + 2, Math.min(zeroY, zeroY - th), 7, Math.abs(th));
-  g.strokeStyle = C.white; g.beginPath(); g.moveTo(lx2 - 3, zeroY); g.lineTo(lx2 + 13, zeroY); g.stroke();
-  txt(g, `${Math.round(p.speed * 4.5)}`, lx2 + 5, byy + bh + 14, { size: 11, align: 'center' });
-  txt(g, 'KPH', lx2 + 5, byy + bh + 24, { size: 8, align: 'center', color: C.dim, glow: 0 });
-
-  const rx = VW * 0.78 - 10;
-  drawHeat(g, rx, byy, 11, bh, p.heat, true, state.time);
-  txt(g, `${Math.round(p.heat)}`, rx + 5, byy + bh + 14, { size: 11, align: 'center', color: p.heat > 80 ? C.bad : C.main });
-  txt(g, 'CALOR', rx + 5, byy + bh + 24, { size: 8, align: 'center', color: C.dim, glow: 0 });
-
-  txt(g, `${state.training ? 'ENTRENAMIENTO' : OBJ_NAME[state.battle?.mode] ?? 'BATALLA'}  ·  ${String(state.score).padStart(6, '0')}`, VW * 0.17 - 8, 22, { size: 10 });
-  txt(g, `HOSTILES ${entities.filter(e => e.alive && hostile(e, player)).length}`, VW * 0.83 + 8, 22, { size: 10, align: 'right', color: C.enemy });
-
-  // indicadores de impacto (direccional)
-  for (const h of state.hitDirs) {
-    const rel = wrap(h.yaw - yaw);
-    const ang = -rel - Math.PI / 2;
-    g.strokeStyle = `rgba(255,74,48,${Math.min(1, h.t)})`; g.lineWidth = 4;
-    g.beginPath(); g.arc(cx, cy, 70, ang - 0.25, ang + 0.25); g.stroke(); g.lineWidth = 1;
-  }
-}
-
-let screenTimer = 0;
-function updateCockpitScreens(dt) {
-  screenTimer -= dt;
-  if (screenTimer > 0) return;
-  screenTimer = 1 / 15;
-  const p = player, S = cockpit.screens, t = state.time;
-  const bg = (s, title) => {
-    const c = s.ctx, w = s.canvas.width, h = s.canvas.height;
-    c.fillStyle = '#020a04'; c.fillRect(0, 0, w, h);
-    c.strokeStyle = 'rgba(134,255,156,0.08)';
-    for (let y = 0; y < h; y += 3) { c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); }
-    txt(c, title, 5, 12, { size: 10, glow: 3 });
-    return c;
-  };
-  if (p.shutdown > 0) {
-    for (const k of ['left', 'center', 'right']) {
-      const c = S[k].ctx; c.fillStyle = '#000'; c.fillRect(0, 0, S[k].canvas.width, S[k].canvas.height);
-      if (Math.sin(t * 6) > 0) txt(c, 'SIN ENERGÍA', S[k].canvas.width / 2, S[k].canvas.height / 2, { size: 12, align: 'center', color: C.bad });
-      S[k].tex.needsUpdate = true;
-    }
-    return;
-  }
-  let c = bg(S.left, 'DAÑOS');
-  drawDamage(c, 37, 18, 8.5, p.armor, p.maxArmor, t);
-  S.left.tex.needsUpdate = true;
-
-  c = bg(S.center, 'RADAR');
-  const w = S.center.canvas.width, h = S.center.canvas.height;
-  drawRadar(c, w / 2, h / 2 + 6, h / 2 - 10, p.pos, p.heading + p.torsoYaw, radarBlips(), 300, t, 0.62);
-  txt(c, '300m', w - 5, 12, { size: 9, align: 'right', color: C.dim, glow: 0 });
-  S.center.tex.needsUpdate = true;
-
-  c = bg(S.right, 'ARMAS');
-  drawWeapons(c, 5, 18, 150, p.weapons, p.armor, 16, 11);
-  txt(c, 'CALOR', 5, 96, { size: 9 });
-  drawHeat(c, 44, 88, 110, 10, p.heat, false, t);
-  S.right.tex.needsUpdate = true;
-}
-
 function drawMenu() {
   g.fillStyle = 'rgba(0,8,3,0.55)';
   g.fillRect(0, 0, VW, VH);
@@ -1256,10 +1058,10 @@ function drawHud() {
   g.clearRect(0, 0, VW, VH);
   if (state.screen === 'menu') { drawMenu(); return; }
   if (state.screen === 'hangar') { drawHangar(); return; }
-  if (state.mode === 'top' || state.screen === 'dead' || state.screen === 'result' || state.ejected) drawTopHud(); else drawCockpitHud();
+  drawTopHud();
   if (state.battleMode) { drawBattleHud(); if (state.battle && state.screen !== 'result') drawSquadPanel(); }
   if (state.training && state.screen === 'play') drawLessons();
-  if (state.thermal) txt(g, '◉ TÉRMICO [V]', VW / 2, state.battleMode ? (state.mode === 'cockpit' && !state.ejected ? 140 : 68) : state.mode === 'cockpit' && state.screen !== 'dead' ? 64 : 16, { size: 10, align: 'center', color: C.warn });
+  if (state.thermal) txt(g, '◉ TÉRMICO [V]', VW / 2, state.battleMode ? 68 : 16, { size: 10, align: 'center', color: C.warn });
   drawMessages();
   if (player.shutdown > 0 && state.screen === 'play') {
     txt(g, `APAGADO — REINICIO EN ${player.shutdown.toFixed(1)}s`, VW / 2, VH * 0.6, { size: 14, align: 'center', color: C.bad });
@@ -1587,7 +1389,6 @@ function respawnPlayer() {
   state.ejected = false;
   state.target = null; state.track = false;
   applyMode();
-  if (state.mode === 'cockpit') lockPointer();
   sfx.powerup();
   msg('NUEVO MECH DESPLEGADO EN LA BASE', C.cyan, 3);
 }
@@ -1711,8 +1512,6 @@ function endBattle(winner, reason) {
   b.over = true;
   state.screen = 'result';
   state.result = { win: winner === 'A', draw: winner === null, reason };
-  document.exitPointerLock?.();
-  cockpit.group.visible = false;
   player.model.root.visible = true;
   camera.fov = FOV_TOP; camera.near = 1; camera.updateProjectionMatrix();
   if (state.result.win) sfx.powerup(); else sfx.shutdown();
@@ -1733,10 +1532,6 @@ function battleKill(e) {
 function drawPlaceMarker(pos, label, col, inside) {
   const focus = state.ejected && playerPod() ? playerPod().mesh.position : player.pos;
   const d = Math.round(Math.hypot(pos.x - focus.x, pos.z - focus.z));
-  if (inside && d < inside && state.mode === 'cockpit' && !state.ejected) {
-    txt(g, `EN ZONA ${label}`, VW / 2, VH * 0.42 + 64, { size: 10, align: 'center', color: col, glow: 4 });
-    return;
-  }
   const wp = pos.clone(); wp.y += 14;
   const pr = wp.project(camera);
   let x = (pr.x + 1) / 2 * VW, y = (1 - pr.y) / 2 * VH;
@@ -1763,8 +1558,7 @@ function drawBattleHud() {
     const col = p.contested ? C.warn : b.mode === 'conquest' ? cssOwner(p.owner) : p.prog > 0 ? cssOwner(b.attackers) : C.white;
     drawPlaceMarker(p.pos, p.name, col, BATTLE.radius);
   }
-  const cock = state.mode === 'cockpit' && !state.ejected && state.screen === 'play';
-  const cx = VW / 2, y = cock ? 76 : 8;
+  const cx = VW / 2, y = 8;
   const w = 220, x = cx - w / 2, by = y + 15;
   const title = {
     assault: 'ASALTO · CAPTURA EL PUNTO ALFA', defense: 'DEFENSA · PROTEGE EL PUNTO ALFA',
@@ -1891,8 +1685,7 @@ function drawSquadPanel() {
   const b = state.battle;
   const allies = entities.filter(e => e.team === 'A' && !e.isPlayer && e.ai && (e.alive || e.deadT < 6))
     .sort((a, c) => (a.slot ?? 0) - (c.slot ?? 0)).slice(0, 4);
-  const cock = state.mode === 'cockpit' && !state.ejected && state.screen === 'play';
-  const w = 176, x = VW - w - 8, y = cock ? 36 : 140;
+  const w = 176, x = VW - w - 8, y = 140;
   const h = 36 + allies.length * 12 + 14;
   g.fillStyle = 'rgba(0,8,20,0.6)'; g.fillRect(x, y, w, h);
   g.strokeStyle = 'rgba(95,168,255,0.45)'; g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
@@ -1925,7 +1718,6 @@ const LESSONS = [
   ['water', 'REFRÍGERATE EN EL AGUA', 'zona con agua'],
   ['trees', 'DERRIBA UN ÁRBOL', 'atraviesa bosque'],
   ['thermal', 'VISIÓN TÉRMICA', 'V'],
-  ['view', 'CAMBIA DE VISTA', 'B'],
 ];
 function lesson(id) {
   if (!state.training || !state.lessons || state.lessons[id] === undefined || state.lessons[id]) return;
@@ -1991,38 +1783,24 @@ function updateTraining(dt) {
   for (const k of Object.keys(p.armor)) if (p.armor[k] > 0) p.armor[k] = Math.min(p.maxArmor[k], p.armor[k] + p.maxArmor[k] * 0.02 * dt);
 }
 
-function switchView() {
-  state.mode = state.mode === 'top' ? 'cockpit' : 'top';
-  applyMode();
-  if (state.mode === 'cockpit') lockPointer(); else document.exitPointerLock?.();
-  lesson('view');
-  sfx.ui();
-  msg(state.mode === 'top' ? 'VISTA TÁCTICA' : 'VISTA CABINA', C.cyan, 1.5);
-}
-
 function drawLessons() {
-  const cock = state.mode === 'cockpit';
-  const x = cock ? 8 : 10;
-  const y0 = cock ? 72 : 76;
+  const x = 10, y0 = 76;
   if (!state.showLessons) { txt(g, 'I LECCIONES', x, y0 + 10, { size: 9, color: C.dim, glow: 0 }); return; }
-  const all = LESSONS.filter(([id]) => state.lessons[id] !== undefined);
-  const done = all.filter(([id]) => state.lessons[id]).length;
-  // en cabina sólo las 3 siguientes pendientes, para no tapar el parabrisas
-  const list = cock ? all.filter(([id]) => !state.lessons[id]).slice(0, 3) : all;
-  const w = cock ? Math.min(176, VW * 0.22 - 14) : 206, h = 22 + list.length * 12 + 26;
+  const list = LESSONS.filter(([id]) => state.lessons[id] !== undefined);
+  const done = list.filter(([id]) => state.lessons[id]).length;
+  const w = 206, h = 22 + list.length * 12 + 26;
   g.fillStyle = 'rgba(0,10,4,0.6)'; g.fillRect(x, y0, w, h);
   g.strokeStyle = C.dim; g.strokeRect(x + 0.5, y0 + 0.5, w - 1, h - 1);
-  txt(g, `LECCIONES ${done}/${all.length}`, x + 6, y0 + 13, { size: 10, color: C.cyan });
+  txt(g, `LECCIONES ${done}/${list.length}`, x + 6, y0 + 13, { size: 10, color: C.cyan });
   list.forEach(([id, name, keyTxt], i) => {
     const yy = y0 + 27 + i * 12;
     const ok = state.lessons[id];
     txt(g, ok ? '■' : '□', x + 6, yy, { size: 9, color: ok ? C.main : C.dim, glow: ok ? 4 : 0 });
     txt(g, name, x + 18, yy, { size: 8, color: ok ? C.dim : C.white, glow: 0 });
-    if (keyTxt && !cock) txt(g, keyTxt, x + w - 6, yy, { size: 8, align: 'right', color: ok ? C.faint : C.warn, glow: 0 });
-    else if (keyTxt && keyTxt.length <= 11) txt(g, keyTxt, x + w - 6, yy, { size: 8, align: 'right', color: C.warn, glow: 0 });
+    if (keyTxt) txt(g, keyTxt, x + w - 6, yy, { size: 8, align: 'right', color: ok ? C.faint : C.warn, glow: 0 });
   });
   const yb = y0 + 27 + list.length * 12 + 4;
-  txt(g, `B VISTA · N DIANA · I OCULTAR`, x + 6, yb, { size: 8, color: C.dim, glow: 0 });
+  txt(g, `N DIANA · I OCULTAR`, x + 6, yb, { size: 8, color: C.dim, glow: 0 });
   txt(g, `O BLANCOS ARMADOS: ${state.trainArmed ? 'SÍ' : 'NO'}`, x + 6, yb + 11, { size: 8, color: state.trainArmed ? C.bad : C.dim, glow: 0 });
 }
 
@@ -2075,9 +1853,9 @@ function toggleThermal() {
 
 // ---------------------------------------------------------------- hangar
 const SAVE_KEY = 'steelhorizon.hangar.v1';
-const hangar = { chassis: 'centinela', cfgs: {}, row: 0, zone: 'desierto', time: 'dusk', objective: 'assault', view: 'top' };
+const hangar = { chassis: 'centinela', cfgs: {}, row: 0, zone: 'desierto', time: 'dusk', objective: 'assault' };
 // filas: chasis · monturas · zona · hora · [objetivo · vista en batalla] · desplegar
-const missionRows = () => (state.battleMode ? ['zone', 'time', 'obj', 'view'] : ['zone', 'time', 'view']);
+const missionRows = () => (state.battleMode ? ['zone', 'time', 'obj'] : ['zone', 'time']);
 const ROW = (k) => { const i = missionRows().indexOf(k); return i < 0 ? -1 : MOUNTS.length + 1 + i; };
 const hrows = () => MOUNTS.length + 1 + missionRows().length + 1;
 const ZONE_IDS = Object.keys(ZONES), TIME_IDS = Object.keys(TIMES);
@@ -2087,7 +1865,6 @@ try {
   if (saved && ZONES[saved.zone]) hangar.zone = saved.zone;
   if (saved && TIMES[saved.time]) hangar.time = saved.time;
   if (saved && OBJECTIVES.includes(saved.objective)) hangar.objective = saved.objective;
-  if (saved && saved.view) hangar.view = saved.view;
 } catch (_) { /* sin almacenamiento */ }
 
 function cfgFor(ch) {
@@ -2098,7 +1875,7 @@ function cfgFor(ch) {
   return cfg;
 }
 function saveHangar() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ chassis: hangar.chassis, cfgs: hangar.cfgs, zone: hangar.zone, time: hangar.time, objective: hangar.objective, view: hangar.view })); } catch (_) { /* ignorar */ }
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ chassis: hangar.chassis, cfgs: hangar.cfgs, zone: hangar.zone, time: hangar.time, objective: hangar.objective })); } catch (_) { /* ignorar */ }
 }
 
 const hangar3d = buildHangar();
@@ -2114,12 +1891,9 @@ function enterHangar(mode, kind = 'battle') {
   initAudio();
   state.training = kind === 'training';
   state.battleMode = kind === 'battle';
-  state.pendingMode = hangar.view;
   state.screen = 'hangar';
   state.msgs = [];
   hangar.row = 0;
-  cockpit.group.visible = false;
-  document.exitPointerLock?.();
   refreshHangarModel();
   sfx.ui();
 }
@@ -2137,10 +1911,6 @@ function hangarChange(dir) {
     sfx.ui(); saveHangar(); return;
   } else if (state.battleMode && hangar.row === ROW('obj')) {
     hangar.objective = OBJECTIVES[(OBJECTIVES.indexOf(hangar.objective) + dir + OBJECTIVES.length) % OBJECTIVES.length];
-    sfx.ui(); saveHangar(); return;
-  } else if (hangar.row === ROW('view')) {
-    state.pendingMode = state.pendingMode === 'top' ? 'cockpit' : 'top';
-    hangar.view = state.pendingMode;
     sfx.ui(); saveHangar(); return;
   } else if (hangar.row <= MOUNTS.length) {
     const m = MOUNTS[hangar.row - 1];
@@ -2173,7 +1943,7 @@ function hangarReset() {
 }
 function deploy() {
   saveHangar();
-  startGame(state.pendingMode || 'top');
+  startGame('top');
 }
 
 let hangarRects = [];
@@ -2189,7 +1959,7 @@ function drawHangar() {
   hangarRects = [];
   const sel = (r) => hangar.row === r;
 
-  txt(g, `HANGAR · ${state.training ? 'ENTRENAMIENTO' : state.battleMode ? 'BATALLA 5 VS 5' : state.pendingMode === 'cockpit' ? 'MODO CABINA' : 'MODO TÁCTICO'}`, VW / 2, 24, { size: 15, align: 'center' });
+  txt(g, `HANGAR · ${state.training ? 'ENTRENAMIENTO' : 'BATALLA 5 VS 5'}`, VW / 2, 24, { size: 15, align: 'center' });
   txt(g, 'CONFIGURACIÓN DEL MECH', VW / 2, 38, { size: 9, align: 'center', color: C.dim, glow: 0 });
 
   // ---- panel izquierdo: chasis
@@ -2225,7 +1995,6 @@ function drawHangar() {
   const my = ly + 238;
   const mrows = [[ROW('zone'), 'MAPA', ZONES[hangar.zone].name], [ROW('time'), 'HORA', TIMES[hangar.time].name]];
   if (state.battleMode) mrows.push([ROW('obj'), 'OBJET.', OBJ_NAME[hangar.objective]]);
-  mrows.push([ROW('view'), 'VISTA', state.pendingMode === 'cockpit' ? 'CABINA' : 'TÁCTICA']);
   frame(g, lx, my, PW, 6 + mrows.length * 30, C.dim, 'MISIÓN');
   mrows.forEach(([r, k, v], i) => {
     const y = my + 3 + i * 30;
@@ -2281,9 +2050,6 @@ function drawHangar() {
     txt(g, D[0], rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
     txt(g, D[1], rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
     txt(g, '5 VS 5 · REFUERZOS LIMITADOS · EYECCIÓN', rx + 10, dy + 38, { size: 8, color: C.dim, glow: 0 });
-  } else if (state.battleMode && hangar.row === ROW('view')) {
-    txt(g, state.battleMode ? 'VISTA INICIAL DE LA BATALLA' : 'VISTA INICIAL DEL ENTRENAMIENTO', rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
-    txt(g, 'B CAMBIA DE VISTA DURANTE LA PARTIDA', rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
   } else if (hangar.row === ROW('time')) {
     txt(g, TIMES[hangar.time].name, rx + 10, dy + 8, { size: 10, color: C.white, glow: 1 });
     if (hangar.time === 'night') {
@@ -2374,19 +2140,10 @@ function frameLoop(now) {
 
   updateCamera(dt);
   camera.updateMatrixWorld();
-  const topView = state.screen !== 'menu' && state.screen !== 'hangar' && (state.mode === 'top' || state.ejected || state.screen === 'dead' || state.screen === 'result');
+  const topView = state.screen !== 'menu' && state.screen !== 'hangar';
   world.setView(topView ? state.zoom : 0);
   world.update(topView ? camLook : (player ? player.pos : V()), camera, state.screen === 'pause' ? 0 : dt, state.time);
 
-  if (cockpit.group.visible && player) {
-    cockpit.update(dt, state.time, {
-      throttle: player.throttle, heat: player.heat / 100, damaged: SECTIONS.some(k => k in player.armor && player.armor[k] < player.maxArmor[k] * 0.33),
-      mdx: mouse.sdx, mdy: mouse.sdy, firing: mouse.b[0] || mouse.b[2] || keys.Space || keys.KeyJ || keys.KeyF || keys.KeyK, shutdown: player.shutdown > 0,
-    });
-    updateCockpitScreens(dt);
-  }
-  mouse.sdx *= 0.8; mouse.sdy *= 0.8;
-  mouse.dx = 0; mouse.dy = 0;
 
   drawHud();
   hudTex.needsUpdate = true;
@@ -2449,10 +2206,8 @@ window.addEventListener('keydown', (e) => {
   } else if (state.screen === 'play') {
     if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
     if (e.code === 'KeyV' && !e.repeat) toggleThermal();
-    if (state.battleMode && !e.repeat && e.code === 'KeyB') switchView();
     if (state.battleMode && !e.repeat && ORDER_KEYS[e.code]) issueOrder(ORDER_KEYS[e.code]);
     if (state.training && !e.repeat) {
-      if (e.code === 'KeyB') switchView();
       if (e.code === 'KeyO') { state.trainArmed = !state.trainArmed; sfx.beep(0.7, state.trainArmed ? 400 : 900); msg(state.trainArmed ? 'BLANCOS ARMADOS: DISPARAN' : 'BLANCOS DESARMADOS', state.trainArmed ? C.bad : C.main, 2); }
       if (e.code === 'KeyI') state.showLessons = !state.showLessons;
       if (e.code === 'KeyN') { spawnTrainingTarget('static'); sfx.ui(); }
@@ -2463,7 +2218,7 @@ window.addEventListener('keydown', (e) => {
       else cycleTarget();
       sfx.ui();
     }
-    if (e.code === 'Escape' || e.code === 'KeyP') { state.screen = 'pause'; document.exitPointerLock?.(); }
+    if (e.code === 'Escape' || e.code === 'KeyP') state.screen = 'pause';
   } else if (state.screen === 'pause') {
     if (e.code === 'Enter' || e.code === 'KeyP') resume();
     if (e.code === 'KeyM') toMenu();
@@ -2476,12 +2231,8 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouse.b = [false, false, false]; });
 
-function lockPointer() {
-  try { const r = renderer.domElement.requestPointerLock?.(); r?.catch?.(() => {}); } catch (_) { /* sin soporte */ }
-}
 function resume() {
   state.screen = 'play';
-  if (state.mode === 'cockpit') lockPointer();
 }
 function toMenu() {
   clearWorld();
@@ -2500,10 +2251,6 @@ cv.addEventListener('mousemove', (e) => {
     const x = mouse.x * VW, y = mouse.y * VH;
     if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) state.menuSel = i;
   });
-  if (document.pointerLockElement === cv) {
-    mouse.dx += e.movementX; mouse.dy += e.movementY;
-    mouse.sdx += e.movementX; mouse.sdy += e.movementY;
-  }
 });
 cv.addEventListener('mousedown', (e) => {
   initAudio();
@@ -2514,17 +2261,10 @@ cv.addEventListener('mousedown', (e) => {
   }
   if (state.screen === 'hangar') { hangarClick(mouse.x * VW, mouse.y * VH); return; }
   if (state.screen === 'pause') { resume(); return; }
-  if (state.screen === 'play' && state.mode === 'cockpit' && document.pointerLockElement !== cv) {
-    lockPointer();
-    return;
-  }
   mouse.b[e.button] = true;
 });
 window.addEventListener('mouseup', (e) => { mouse.b[e.button] = false; });
 cv.addEventListener('contextmenu', (e) => e.preventDefault());
-document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== cv && state.screen === 'play' && state.mode === 'cockpit' && !state.ejected) state.screen = 'pause';
-});
 
 setupMenuScene();
 requestAnimationFrame(frameLoop);
