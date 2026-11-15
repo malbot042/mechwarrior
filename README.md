@@ -1,6 +1,6 @@
 # STEEL HORIZON — simulador de combate mech (estilo MechWarrior / BattleTech)
 
-Juego en HTML + JavaScript con Three.js y post-proceso CRT (pantalla plana, sin esquinas redondeadas).
+Juego en HTML + JavaScript con Three.js y post-proceso CRT (pantalla plana, sin esquinas redondeadas). Se juega **solo con teclado**; el ratón es opcional.
 
 ## Cómo jugar
 
@@ -13,20 +13,35 @@ python3 -m http.server 8000
 
 También funciona tal cual en GitHub Pages.
 
-### Modos (independientes, se eligen en el menú)
+### Flujo
 
-| Modo | Vista | Apuntado |
-|------|-------|----------|
-| **[1] TÁCTICO** | Cenital, cámara sobre el mech | Flechas giran el torso (o el torso sigue al cursor si usas ratón) |
-| **[2] CABINA** | Primera persona, interior de cabina 3D | Flechas (o ratón capturado) mueven torso y mira |
+**Menú → hangar → misión.** En el menú eliges modo (↑↓ + Enter o teclas 1 / 2 / 3); en el hangar configuras el mech, la zona y la hora; con Enter despliegas. Al morir, Enter te devuelve al hangar.
+
+### Modos
+
+| Modo | Vista | Descripción |
+|------|-------|-------------|
+| **[1] TÁCTICO** | Cenital | Campaña por oleadas vista desde arriba. Flechas giran el torso (o el torso sigue al cursor si usas ratón); ↑↓ ajustan el alcance de la mira. Rueda = zoom. |
+| **[2] CABINA** | Primera persona | Campaña por oleadas desde el interior de la cabina 3D con instrumentos. Flechas (o ratón capturado) mueven torso y mira. |
+| **[3] ENTRENAMIENTO** | Las dos (cambia con **B**) | Práctica libre para aprender los controles. Ver más abajo. |
+
+### Entrenamiento
+
+Modo libre para practicar sin presión:
+
+- **Sin muerte**: el blindaje se repara poco a poco y, si el mech llegara a caer, se restaura entero.
+- **Dianas que reaparecen**: 3 dianas fijas cerca, 2 dianas móviles y un tanque. Cada diana destruida vuelve a aparecer a los 4 s; **N** crea una diana fija más.
+- **Blancos armados (O)**: por defecto las dianas no disparan; con O empiezan a devolver el fuego para practicar con presión real.
+- **Cambio de vista en caliente (B)** entre táctica y cabina.
+- **Lecciones** que se marcan solas al hacerlas (I oculta/muestra el panel; en cabina se muestran las 3 siguientes):
+  acelerar · girar piernas · girar torso · fijar blanco · disparar cada grupo · destruir una diana · superar el 70 % de calor · refrigerarse en el agua (si la zona tiene) · derribar un árbol (si hay bosque) · visión térmica · cambiar de vista.
+- Usa el mismo hangar: puedes probar cualquier chasis, configuración, zona y hora.
 
 ### Controles
 
-Se puede jugar **solo con teclado** (el ratón es opcional).
-
 | Tecla | Acción |
 |-------|--------|
-| ↑ / ↓ + Enter (o 1 / 2) | Elegir modo en el menú |
+| ↑ / ↓ + Enter (o 1 / 2 / 3) | Elegir modo en el menú |
 | W / S | Subir / bajar acelerador (marcha atrás limitada) |
 | A / D | Girar piernas |
 | ← / → | Girar torso |
@@ -40,6 +55,7 @@ Se puede jugar **solo con teclado** (el ratón es opcional).
 | V | Visión térmica on/off |
 | T | Paleta CRT: color / ámbar / fósforo verde |
 | Esc / P | Pausa (Enter continuar, H hangar, M menú) |
+| B · O · N · I | Sólo entrenamiento: cambiar vista · blancos armados · nueva diana · panel de lecciones |
 
 Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del torso se fija solo.
 
@@ -47,7 +63,7 @@ Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del 
 
 ## Hangar
 
-Después de elegir modo entras al **hangar**, donde configuras el mech y eliges la zona y la hora de la misión antes de desplegar. Se maneja con teclado (↑↓ elegir fila, ←→ cambiar, G grupo de disparo, R restablecer, Enter desplegar, Esc menú) o haciendo clic en las flechas. La configuración se guarda en el navegador.
+Antes de cada misión configuras el mech y eliges zona y hora. Se maneja con teclado (↑↓ elegir fila, ←→ cambiar, G grupo de disparo, R restablecer, Enter desplegar, Esc menú) o haciendo clic en las flechas. Todo se guarda en el navegador.
 
 | Chasis | Clase | Tonelaje | Velocidad | Carga de armas | Monturas (LA / LT / RT / RA) |
 |--------|-------|----------|-----------|----------------|------------------------------|
@@ -88,32 +104,32 @@ Se eligen en el panel **MISIÓN** del hangar (filas ZONA y HORA); se pueden comb
 | ATARDECER | Luz rasante naranja, ventanas encendidas |
 | NOCHE | Luna y estrellas, niebla oscura, visibilidad corta; el mech enciende focos |
 
-- **Agua**: vadear ríos y lagos reduce la velocidad un 40 % pero **refrigera un 70 % más rápido** (como en BattleTech). Salpicaduras al caminar y en los impactos.
+- **Agua**: vadear ríos y lagos reduce la velocidad un 40 % pero **refrigera un 70 % más rápido** (como en BattleTech). Salpicaduras al caminar y en los impactos. Nunca se despliega dentro del agua.
 - **Bosques**: los árboles **caen** cuando un mech o tanque los atraviesa. Estar dentro de un bosque da **cobertura**: los enemigos fallan más y no te disparan a más de 150 m.
 - **Visión térmica (V)**: renderiza cada objeto según su temperatura con paleta *ironbow* (negro → morado → rojo → naranja → blanco). Los mechs brillan más cuanto más calor acumulan, los restos humean calientes, el agua y el terreno quedan fríos. Imprescindible de noche.
 
 ## Sistemas implementados
 
 - **Torso independiente de las piernas**, como en BattleTech.
-- **Daño por secciones**: brazos, torsos laterales, torso central y piernas. Si pierdes un brazo pierdes sus armas; con las piernas dañadas vas más lento; si caen el torso central o las piernas, el mech queda destruido.
-- **Calor**: cada disparo calienta. Al llegar al 100 % el reactor se apaga 4 s (la pantalla se llena de estática).
+- **Daño por secciones**: brazos, torsos laterales, torso central y piernas. Si pierdes un brazo o un torso lateral pierdes sus armas; con las piernas dañadas vas más lento; si caen el torso central o las piernas, el mech queda destruido.
+- **Calor**: cada disparo calienta. Al llegar al 100 % el reactor se apaga 4 s (la pantalla se llena de estática). El agua y los disipadores extra ayudan.
 - **Armas**: láseres (impacto instantáneo), PPC (proyectil rápido), cañones automáticos, SRM (salva directa) y LRM (salva guiada).
-- **Enemigos** con IA (acercarse / mantener distancia / flanquear, línea de visión): "Chacal" (ligero), "Merodeador" (medio), "Coloso" (pesado, desde la oleada 5) y tanques. Usan los mismos chasis que el jugador.
+- **Enemigos** con IA (acercarse / mantener distancia / flanquear, línea de visión, cobertura del bosque): "Chacal" (ligero), "Merodeador" (medio), "Coloso" (pesado, desde la oleada 5) y tanques. Usan los mismos chasis que el jugador.
 - **Oleadas** crecientes con reparación parcial entre ellas.
 - **Edificios destructibles** que bloquean disparos y movimiento.
 - **Cabina 3D**: marco de parabrisas, salpicadero con 3 pantallas vivas (daños, radar, armas/calor), palanca de aceleración y joystick que se mueven con tus acciones, botonera parpadeante y luces de aviso.
-- **CRT**: paleta térmica integrada en el shader, scanlines, máscara de apertura RGB, aberración cromática, bloom de fósforo, ruido, parpadeo, banda de refresco, sacudida al recibir impactos. El HUD también pasa por el filtro.
-- **Sonido** sintetizado con WebAudio (sin archivos).
+- **CRT**: scanlines, máscara de apertura RGB, aberración cromática, bloom de fósforo, ruido, parpadeo, banda de refresco, sacudida al recibir impactos y paleta térmica integrada. El HUD también pasa por el filtro.
+- **Sonido** sintetizado con WebAudio (sin archivos): armas, explosiones, pasos, árboles, agua, alarmas y zumbido del reactor.
 
 ## Estructura
 
 ```
 index.html        importmap + arranque
 lib/              three.js r187 (vendorizado, licencia MIT)
-js/main.js        bucle, estado, entidades, armas, IA, HUD, hangar (UI)
+js/main.js        bucle, estado, entidades, armas, IA, HUD, hangar (UI), entrenamiento, visión térmica
 js/data.js        catálogo de armas y chasis, cálculo de estadísticas
 js/hangar.js      escena 3D del hangar
-js/crt.js         shader CRT de post-proceso
+js/crt.js         shader CRT de post-proceso (incluye paleta térmica)
 js/world.js       zonas y horas: terreno, ríos/agua, bosques instanciados, cielo, luces, edificios
 js/models.js      modelos low-poly de mech (armas visibles según configuración) y tanque
 js/cockpit.js     interior de cabina (hijo de la cámara)
@@ -124,4 +140,5 @@ js/audio.js       efectos de sonido sintetizados
 ## Ideas para seguir
 
 - Saltos (jump jets), pantalla de mapa, waypoints y misiones con objetivos
+- Progresión: créditos por oleada para desbloquear chasis y armas
 - Gamepad, ajustes de sensibilidad, intensidad del efecto CRT

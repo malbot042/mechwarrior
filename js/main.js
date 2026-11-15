@@ -80,6 +80,7 @@ const state = {
   track: false,       // seguimiento automático del blanco
   aimDist: 60,
   menuSel: 0,
+  training: false, trainArmed: false, showLessons: true, lessons: null, respawns: [],
   target: null,
   aim: new THREE.Vector3(),
   hitDirs: [],
@@ -241,8 +242,9 @@ function startGame(mode) {
   if (mode === 'cockpit') lockPointer();
   state.thermal = false;
   if (world.time === 'night') setTimeout(() => msg('VISIBILIDAD NOCTURNA — PULSE V PARA VISIÓN TÉRMICA', C.warn, 5), 1200);
-  spawnWave();
-  msg(mode === 'top' ? 'MODO TÁCTICO — FLECHAS APUNTAR · Q BLANCO' : 'MODO CABINA — FLECHAS APUNTAR · Q BLANCO', C.cyan, 4);
+  if (state.training) startTraining();
+  else spawnWave();
+  if (!state.training) msg(mode === 'top' ? 'MODO TÁCTICO — FLECHAS APUNTAR · Q BLANCO' : 'MODO CABINA — FLECHAS APUNTAR · Q BLANCO', C.cyan, 4);
   state.track = false; state.aimDist = 60;
 }
 
@@ -336,7 +338,9 @@ function damage(e, amount, point, src) {
   } else if (src === player) {
     sfx.hit(0.3);
   }
-  if (e.armor.CT <= 0 || (e.armor.LEGS !== undefined && e.armor.LEGS <= 0)) kill(e);
+  const dead = e.armor.CT <= 0 || (e.armor.LEGS !== undefined && e.armor.LEGS <= 0);
+  if (dead && e.isPlayer && state.training) { repairPlayer(1); msg('MECH DESTRUIDO — REPARADO (ENTRENAMIENTO)', C.warn, 3); return; }
+  if (dead) kill(e);
 }
 
 function damageObs(o, amount, point) {
@@ -373,6 +377,7 @@ function kill(e) {
     player.model.root.visible = true;
   } else {
     state.score += e.value; state.kills++;
+    if (state.training) { lesson('kill'); state.respawns.push({ type: e.trainType ?? 'static', t: 4 }); }
     if (state.target === e) state.target = null;
     msg(`${e.name} ELIMINADO +${e.value}`, C.main, 2);
   }
@@ -461,6 +466,7 @@ function fireGroup(e, group, aimPoint, target) {
     fireWeapon(e, w, aimPoint, target);
     fired = true;
   }
+  if (fired && e.isPlayer) lesson('g' + group);
   return fired;
 }
 
@@ -582,6 +588,7 @@ function cycleTarget() {
   if (!list.length) { msg('SIN BLANCOS', C.dim, 1.2); return; }
   const i = list.indexOf(state.target);
   state.target = list[(i + 1) % list.length];
+  lesson('target');
   state.track = true;
   state.input = 'keys';
   sfx.beep(0.7, 1320);
@@ -698,7 +705,7 @@ function updatePlayer(dt) {
 // ---------------------------------------------------------------- IA
 function updateAI(e, dt) {
   const ai = e.ai;
-  if (!player.alive || e.shutdown > 0) { e.throttle = 0; return; }
+  if (!player.alive || e.shutdown > 0 || ai.static) { e.throttle = 0; if (!ai.static) return; }
   ai.t -= dt; ai.fireT -= dt;
   const toYaw = yawTo(e.pos, player.pos);
   const dist = Math.hypot(player.pos.x - e.pos.x, player.pos.z - e.pos.z);
@@ -711,13 +718,15 @@ function updateAI(e, dt) {
   if (e.throttle > 0.5 && (e.realSpeed ?? 1) < e.maxSpeed * 0.15) ai.stuck += dt; else ai.stuck = Math.max(0, ai.stuck - dt);
   if (ai.stuck > 0.8) { ai.avoid = 1.5; ai.stuck = 0; ai.strafe *= -1; }
   if (ai.avoid > 0) { ai.avoid -= dt; desired = e.heading + 1.2 * ai.strafe; }
-  e.heading = wrap(e.heading + clamp(wrap(desired - e.heading), -e.turnRate * dt, e.turnRate * dt));
+  if (ai.static) e.throttle = 0;   // diana fija: sólo gira el torso
+  else e.heading = wrap(e.heading + clamp(wrap(desired - e.heading), -e.turnRate * dt, e.turnRate * dt));
   // torso / torreta
   const lim = e.kind === 'tank' ? Math.PI : 1.7;
   const tDes = clamp(wrap(toYaw - e.heading), -lim, lim);
   e.torsoYaw += clamp(wrap(tDes - e.torsoYaw), -2 * dt, 2 * dt);
   const aligned = Math.abs(wrap(toYaw - e.heading - e.torsoYaw)) < 0.18;
   if (!aligned || ai.fireT > 0 || e.heat > 70) return;
+  if (state.training && !state.trainArmed) return;   // dianas sin munición
   // línea de visión
   const eye = center(e);
   const pc = center(player);
@@ -892,7 +901,7 @@ function drawTopHud() {
   g.beginPath(); g.moveTo(ps.x, ps.y); g.lineTo(mx, my); g.stroke();
 
   // paneles
-  txt(g, `OLEADA ${state.wave}`, 12, 20, { size: 13 });
+  txt(g, state.training ? 'ENTRENAMIENTO' : `OLEADA ${state.wave}`, 12, 20, { size: 13, color: state.training ? C.cyan : C.main });
   txt(g, `PUNTOS ${String(state.score).padStart(6, '0')}`, 12, 36, { size: 11 });
   txt(g, `HOSTILES ${entities.filter(e => e.alive && !e.isPlayer).length}`, 12, 50, { size: 11, color: C.enemy });
   if (state.track) txt(g, 'SEGUIMIENTO DE BLANCO [R]', 12, 66, { size: 10, color: C.cyan });
@@ -1010,7 +1019,7 @@ function drawCockpitHud() {
   txt(g, `${Math.round(p.heat)}`, rx + 5, byy + bh + 14, { size: 11, align: 'center', color: p.heat > 80 ? C.bad : C.main });
   txt(g, 'CALOR', rx + 5, byy + bh + 24, { size: 8, align: 'center', color: C.dim, glow: 0 });
 
-  txt(g, `OLEADA ${state.wave}  ·  ${String(state.score).padStart(6, '0')}`, VW * 0.17 - 8, 22, { size: 10 });
+  txt(g, `${state.training ? 'ENTRENAMIENTO' : 'OLEADA ' + state.wave}  ·  ${String(state.score).padStart(6, '0')}`, VW * 0.17 - 8, 22, { size: 10 });
   txt(g, `HOSTILES ${entities.filter(e => e.alive && !e.isPlayer).length}`, VW * 0.83 + 8, 22, { size: 10, align: 'right', color: C.enemy });
 
   // indicadores de impacto (direccional)
@@ -1068,28 +1077,29 @@ function drawMenu() {
   txt(g, 'STEEL HORIZON', cx, 110, { size: 46, align: 'center', glow: 18 });
   txt(g, 'SIMULADOR DE COMBATE MECH  ·  CLASE BATTLETECH', cx, 136, { size: 12, align: 'center', color: C.warn });
   const opts = [
-    ['1', 'MODO TÁCTICO', 'vista cenital · el torso sigue al cursor'],
-    ['2', 'MODO CABINA', 'primera persona · controles e instrumentos'],
+    ['1', 'MODO TÁCTICO', 'vista cenital · campaña por oleadas'],
+    ['2', 'MODO CABINA', 'primera persona · campaña por oleadas'],
+    ['3', 'ENTRENAMIENTO', 'práctica libre · dianas · lecciones · B cambia de vista'],
   ];
   menuRects = [];
   opts.forEach(([k, a, b], i) => {
-    const y = 190 + i * 64, w = 380, x = cx - w / 2;
+    const y = 164 + i * 58, w = 400, x = cx - w / 2;
     const hover = state.menuSel === i;
-    frame(g, x, y, w, 50, hover ? C.main : C.dim);
-    if (hover) { g.fillStyle = 'rgba(134,255,156,0.08)'; g.fillRect(x, y, w, 50); }
-    txt(g, `[${k}] ${a}`, x + 16, y + 22, { size: 16 });
-    txt(g, b, x + 16, y + 40, { size: 10, color: C.dim, glow: 0 });
-    menuRects.push({ x, y, w, h: 50, mode: i === 0 ? 'top' : 'cockpit' });
+    frame(g, x, y, w, 48, hover ? C.main : C.dim);
+    if (hover) { g.fillStyle = 'rgba(134,255,156,0.08)'; g.fillRect(x, y, w, 48); }
+    txt(g, `[${k}] ${a}`, x + 16, y + 21, { size: 16, color: i === 2 ? C.cyan : C.main });
+    txt(g, b, x + 16, y + 39, { size: 10, color: C.dim, glow: 0 });
+    menuRects.push({ x, y, w, h: 48, sel: i });
   });
   const lines = [
     'W/S ACELERADOR · A/D GIRAR PIERNAS · X PARAR · C CENTRAR TORSO',
     'FLECHAS APUNTAR TORSO · Q/TAB SIGUIENTE BLANCO · R SEGUIMIENTO',
-    'ESPACIO/J LÁSERES · F/K PPC · E/L MISILES LRM',
+    'ESPACIO/J GRUPO 1 · F/K GRUPO 2 · E/L GRUPO 3',
     'V VISIÓN TÉRMICA · T PALETA CRT · ESC PAUSA',
     'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA · RUEDA ZOOM',
   ];
   lines.forEach((l, i) => txt(g, l, cx, 350 + i * 16, { size: 10, align: 'center', color: C.main, glow: 2 }));
-  if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2', cx, 432, { size: 12, align: 'center', color: C.white });
+  if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2 / 3', cx, 432, { size: 12, align: 'center', color: C.white });
   txt(g, `PALETA: ${['COLOR', 'ÁMBAR', 'FÓSFORO VERDE'][state.palette]}`, 10, VH - 10, { size: 9, color: C.dim, glow: 0 });
 }
 let menuRects = [];
@@ -1099,6 +1109,7 @@ function drawHud() {
   if (state.screen === 'menu') { drawMenu(); return; }
   if (state.screen === 'hangar') { drawHangar(); return; }
   if (state.mode === 'top' || state.screen === 'dead') drawTopHud(); else drawCockpitHud();
+  if (state.training && state.screen === 'play') drawLessons();
   if (state.thermal) txt(g, '◉ TÉRMICO [V]', VW / 2, state.mode === 'cockpit' && state.screen !== 'dead' ? 64 : 16, { size: 10, align: 'center', color: C.warn });
   drawMessages();
   if (player.shutdown > 0 && state.screen === 'play') {
@@ -1116,6 +1127,128 @@ function drawHud() {
     txt(g, `OLEADA ${state.wave} · ${state.kills} DERRIBOS · ${state.score} PUNTOS`, VW / 2, VH / 2 + 30, { size: 13, align: 'center', color: C.white });
     txt(g, 'ENTER HANGAR  ·  M MENÚ PRINCIPAL', VW / 2, VH / 2 + 52, { size: 11, align: 'center', color: C.dim });
   }
+}
+
+// ---------------------------------------------------------------- entrenamiento
+// Práctica libre: dianas que reaparecen, sin muerte, lecciones que se marcan solas
+// y cambio de vista en caliente (B).
+const LESSONS = [
+  ['throttle', 'ACELERA', 'W / S'],
+  ['turn', 'GIRA LAS PIERNAS', 'A / D'],
+  ['torso', 'GIRA EL TORSO', '← → o ratón'],
+  ['target', 'FIJA UN BLANCO', 'Q / TAB'],
+  ['g0', 'DISPARA GRUPO 1', 'ESPACIO / J'],
+  ['g1', 'DISPARA GRUPO 2', 'F / K'],
+  ['g2', 'DISPARA GRUPO 3', 'E / L'],
+  ['kill', 'DESTRUYE UNA DIANA', ''],
+  ['heat', 'SUPERA 70% DE CALOR', 'dispara seguido'],
+  ['water', 'REFRÍGERATE EN EL AGUA', 'zona con agua'],
+  ['trees', 'DERRIBA UN ÁRBOL', 'atraviesa bosque'],
+  ['thermal', 'VISIÓN TÉRMICA', 'V'],
+  ['view', 'CAMBIA DE VISTA', 'B'],
+];
+function lesson(id) {
+  if (!state.training || !state.lessons || state.lessons[id] === undefined || state.lessons[id]) return;
+  state.lessons[id] = true;
+  sfx.beep(0.6, 1760);
+  const all = Object.values(state.lessons).every(Boolean);
+  if (all) msg('¡ENTRENAMIENTO COMPLETADO! SIGUE PRACTICANDO O ESC → M MENÚ', C.cyan, 6);
+}
+
+function repairPlayer(frac) {
+  for (const k of Object.keys(player.armor)) player.armor[k] = Math.min(player.maxArmor[k], player.armor[k] + player.maxArmor[k] * frac);
+  for (const k of ['LA', 'RA']) if (player.armor[k] > 0) player.model.sections[k].visible = true;
+  if (player.armor.LT > 0) player.model.sideL.visible = true;
+  if (player.armor.RT > 0) player.model.sideR.visible = true;
+  player.maxSpeed = player.baseSpeed;
+}
+
+function spawnTrainingTarget(type, near = false) {
+  let e;
+  if (type === 'tank') e = createTank({ armor: 25 });
+  else e = enemyMech(type === 'mover' ? 'medium' : 'light');
+  e.trainType = type;
+  e.name = type === 'static' ? 'DIANA' : type === 'mover' ? 'DIANA MÓVIL' : 'TANQUE DIANA';
+  e.value = type === 'mover' ? 150 : 50;
+  if (type === 'static') e.ai.static = true;
+  const fy = player.heading + (Math.random() - 0.5) * (near ? 0.9 : 3.2);
+  const r = type === 'static' ? 60 + Math.random() * 70 : 130 + Math.random() * 60;
+  placeFree(e, player.pos.x - Math.sin(fy) * r, player.pos.z - Math.cos(fy) * r);
+  e.heading = yawTo(e.pos, player.pos);
+  entities.push(e);
+  moveEntity(e, 0.016);
+  return e;
+}
+
+function startTraining() {
+  state.trainArmed = false;
+  state.showLessons = true;
+  state.respawns = [];
+  state.lessons = {};
+  for (const [id] of LESSONS) state.lessons[id] = false;
+  if (world.Z.waterY === null) delete state.lessons.water;
+  if (!world.trees.length) delete state.lessons.trees;
+  for (let i = 0; i < 3; i++) spawnTrainingTarget('static', true);
+  for (let i = 0; i < 2; i++) spawnTrainingTarget('mover');
+  spawnTrainingTarget('tank');
+  msg('ENTRENAMIENTO — SIGUE LAS LECCIONES DE LA IZQUIERDA', C.cyan, 5);
+}
+
+function updateTraining(dt) {
+  const p = player;
+  if (p.throttle > 0.5) lesson('throttle');
+  if (keys.KeyA || keys.KeyD) lesson('turn');
+  if (Math.abs(p.torsoYaw) > 0.5) lesson('torso');
+  if (p.heat > 70) lesson('heat');
+  if (p.inWater && p.heat > 0) lesson('water');
+  if (world.trees.some(t => t.fallen)) lesson('trees');
+  for (let i = state.respawns.length - 1; i >= 0; i--) {
+    const r = state.respawns[i];
+    r.t -= dt;
+    if (r.t <= 0) { spawnTrainingTarget(r.type); state.respawns.splice(i, 1); }
+  }
+  // reparación lenta para no tener que salir nunca
+  for (const k of Object.keys(p.armor)) if (p.armor[k] > 0) p.armor[k] = Math.min(p.maxArmor[k], p.armor[k] + p.maxArmor[k] * 0.02 * dt);
+}
+
+function switchView() {
+  state.mode = state.mode === 'top' ? 'cockpit' : 'top';
+  applyMode();
+  if (state.mode === 'cockpit') lockPointer(); else document.exitPointerLock?.();
+  lesson('view');
+  sfx.ui();
+  msg(state.mode === 'top' ? 'VISTA TÁCTICA' : 'VISTA CABINA', C.cyan, 1.5);
+}
+
+function drawLessons() {
+  const cock = state.mode === 'cockpit';
+  const x = cock ? 8 : 10;
+  const y0 = cock ? 72 : 76;
+  if (!state.showLessons) { txt(g, 'I LECCIONES', x, y0 + 10, { size: 9, color: C.dim, glow: 0 }); return; }
+  const all = LESSONS.filter(([id]) => state.lessons[id] !== undefined);
+  const done = all.filter(([id]) => state.lessons[id]).length;
+  // en cabina sólo las 3 siguientes pendientes, para no tapar el parabrisas
+  const list = cock ? all.filter(([id]) => !state.lessons[id]).slice(0, 3) : all;
+  const w = cock ? Math.min(176, VW * 0.22 - 14) : 206, h = 22 + list.length * 12 + 26;
+  g.fillStyle = 'rgba(0,10,4,0.6)'; g.fillRect(x, y0, w, h);
+  g.strokeStyle = C.dim; g.strokeRect(x + 0.5, y0 + 0.5, w - 1, h - 1);
+  txt(g, `LECCIONES ${done}/${all.length}`, x + 6, y0 + 13, { size: 10, color: C.cyan });
+  list.forEach(([id, name, keyTxt], i) => {
+    const yy = y0 + 27 + i * 12;
+    const ok = state.lessons[id];
+    txt(g, ok ? '■' : '□', x + 6, yy, { size: 9, color: ok ? C.main : C.dim, glow: ok ? 4 : 0 });
+    txt(g, name, x + 18, yy, { size: 8, color: ok ? C.dim : C.white, glow: 0 });
+    if (keyTxt && !cock) txt(g, keyTxt, x + w - 6, yy, { size: 8, align: 'right', color: ok ? C.faint : C.warn, glow: 0 });
+    else if (keyTxt && keyTxt.length <= 11) txt(g, keyTxt, x + w - 6, yy, { size: 8, align: 'right', color: C.warn, glow: 0 });
+  });
+  const yb = y0 + 27 + list.length * 12 + 4;
+  txt(g, `B VISTA · N DIANA · I OCULTAR`, x + 6, yb, { size: 8, color: C.dim, glow: 0 });
+  txt(g, `O BLANCOS ARMADOS: ${state.trainArmed ? 'SÍ' : 'NO'}`, x + 6, yb + 11, { size: 8, color: state.trainArmed ? C.bad : C.dim, glow: 0 });
+}
+
+function menuStart(i) {
+  if (i === 2) enterHangar('top', true);
+  else enterHangar(i === 0 ? 'top' : 'cockpit', false);
 }
 
 // ---------------------------------------------------------------- visión térmica
@@ -1155,6 +1288,7 @@ function endThermal() {
 }
 function toggleThermal() {
   state.thermal = !state.thermal;
+  lesson('thermal');
   sfx.beep(0.7, state.thermal ? 1500 : 700);
   msg(state.thermal ? 'VISIÓN TÉRMICA ACTIVA' : 'VISIÓN NORMAL', C.cyan, 1.5);
 }
@@ -1192,9 +1326,10 @@ function refreshHangarModel() {
   hangar3d.setMech(ch.colors, loadout, ch.scale);
 }
 
-function enterHangar(mode) {
+function enterHangar(mode, training = false) {
   initAudio();
   state.pendingMode = mode;
+  state.training = training;
   state.screen = 'hangar';
   state.msgs = [];
   hangar.row = 0;
@@ -1262,7 +1397,7 @@ function drawHangar() {
   hangarRects = [];
   const sel = (r) => hangar.row === r;
 
-  txt(g, `HANGAR · ${state.pendingMode === 'cockpit' ? 'MODO CABINA' : 'MODO TÁCTICO'}`, VW / 2, 24, { size: 15, align: 'center' });
+  txt(g, `HANGAR · ${state.training ? 'ENTRENAMIENTO' : state.pendingMode === 'cockpit' ? 'MODO CABINA' : 'MODO TÁCTICO'}`, VW / 2, 24, { size: 15, align: 'center' });
   txt(g, 'CONFIGURACIÓN DEL MECH', VW / 2, 38, { size: 9, align: 'center', color: C.dim, glow: 0 });
 
   // ---- panel izquierdo: chasis
@@ -1415,8 +1550,9 @@ function frameLoop(now) {
       else if (updateDead(e, dt)) { scene.remove(e.model.root); entities.splice(i, 1); }
     }
     updateProjectiles(dt);
-    // oleadas
-    if (!entities.some(e => e.alive && !e.isPlayer)) {
+    // oleadas (o dianas en entrenamiento)
+    if (state.training) updateTraining(dt);
+    else if (!entities.some(e => e.alive && !e.isPlayer)) {
       if (state.waveTimer <= 0) {
         state.waveTimer = 6;
         msg(`OLEADA ${state.wave} SUPERADA — REPARANDO`, C.cyan, 4);
@@ -1503,15 +1639,23 @@ window.addEventListener('keydown', (e) => {
   if (e.code.startsWith('Arrow')) state.input = 'keys';
   if (e.code === 'KeyT') { state.palette = (state.palette + 1) % 3; sfx.ui(); }
   if (state.screen === 'menu') {
-    if (e.code === 'Digit1' || e.code === 'Numpad1') enterHangar('top');
-    if (e.code === 'Digit2' || e.code === 'Numpad2') enterHangar('cockpit');
-    if (['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS'].includes(e.code)) { state.menuSel = 1 - state.menuSel; sfx.ui(); }
-    if (e.code === 'Enter' || e.code === 'Space') enterHangar(state.menuSel === 0 ? 'top' : 'cockpit');
+    if (e.code === 'Digit1' || e.code === 'Numpad1') menuStart(0);
+    if (e.code === 'Digit2' || e.code === 'Numpad2') menuStart(1);
+    if (e.code === 'Digit3' || e.code === 'Numpad3') menuStart(2);
+    if (e.code === 'ArrowUp' || e.code === 'KeyW') { state.menuSel = (state.menuSel + 2) % 3; sfx.ui(); }
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') { state.menuSel = (state.menuSel + 1) % 3; sfx.ui(); }
+    if (e.code === 'Enter' || e.code === 'Space') menuStart(state.menuSel);
   } else if (state.screen === 'hangar') {
     if (!e.repeat || e.code.startsWith('Arrow')) hangarKey(e.code);
   } else if (state.screen === 'play') {
     if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
     if (e.code === 'KeyV' && !e.repeat) toggleThermal();
+    if (state.training && !e.repeat) {
+      if (e.code === 'KeyB') switchView();
+      if (e.code === 'KeyO') { state.trainArmed = !state.trainArmed; sfx.beep(0.7, state.trainArmed ? 400 : 900); msg(state.trainArmed ? 'BLANCOS ARMADOS: DISPARAN' : 'BLANCOS DESARMADOS', state.trainArmed ? C.bad : C.main, 2); }
+      if (e.code === 'KeyI') state.showLessons = !state.showLessons;
+      if (e.code === 'KeyN') { spawnTrainingTarget('static'); sfx.ui(); }
+    }
     if (e.code === 'KeyR' && !e.repeat) {
       if (state.track) state.track = false;
       else if (state.target && state.target.alive) { state.track = true; state.input = 'keys'; }
@@ -1522,7 +1666,7 @@ window.addEventListener('keydown', (e) => {
   } else if (state.screen === 'pause') {
     if (e.code === 'Enter' || e.code === 'KeyP') resume();
     if (e.code === 'KeyM') toMenu();
-    if (e.code === 'KeyH') { clearWorld(); setupMenuScene(); enterHangar(state.mode); }
+    if (e.code === 'KeyH') { clearWorld(); setupMenuScene(); enterHangar(state.mode, state.training); }
   } else if (state.screen === 'dead') {
     if (e.code === 'Enter') { clearWorld(); setupMenuScene(); enterHangar(state.mode); }
     if (e.code === 'KeyM') toMenu();
@@ -1564,7 +1708,7 @@ cv.addEventListener('mousedown', (e) => {
   initAudio();
   if (state.screen === 'menu') {
     const x = mouse.x * VW, y = mouse.y * VH;
-    for (const r of menuRects) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) enterHangar(r.mode);
+    for (const r of menuRects) if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) menuStart(r.sel);
     return;
   }
   if (state.screen === 'hangar') { hangarClick(mouse.x * VW, mouse.y * VH); return; }
