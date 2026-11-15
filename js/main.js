@@ -103,7 +103,12 @@ const yawTo = (from, to) => Math.atan2(-(to.x - from.x), -(to.z - from.z));
 const fwd = (yaw, out = V()) => out.set(-Math.sin(yaw), 0, -Math.cos(yaw));
 const center = (e, out = V()) => out.set(e.pos.x, e.pos.y + e.centerH, e.pos.z);
 const volAt = (p) => player ? clamp(1 - p.distanceTo(player.pos) / 420, 0, 1) : 0.5;
-function msg(text, color = C.main, dur = 3) { state.msgs.push({ text, color, t: dur, dur }); }
+function msg(text, color = C.main, dur = 3) {
+  state.msgs.push({ text, color, t: dur, dur });
+  // como máximo 4 mensajes temporales en pantalla
+  const temp = state.msgs.filter(m => m.dur < 99);
+  if (temp.length > 4) state.msgs.splice(state.msgs.indexOf(temp[0]), 1);
+}
 
 // ---------------------------------------------------------------- entidades
 function createMech(o) {
@@ -730,7 +735,11 @@ function updateAI(e, dt) {
   const ai = e.ai;
   if (e.shutdown > 0) { e.throttle = 0; return; }
   ai.t -= dt; ai.fireT -= dt; ai.scan = (ai.scan ?? 0) - dt;
-  if (ai.scan <= 0 || !ai.target || !ai.target.alive) {
+  // orden de escuadra (sólo aliados del jugador en batalla)
+  const ord = state.battleMode && state.battle && e.team === 'A' ? state.battle.order : null;
+  const ordType = ord ? ord.type : 'free';
+  if (ordType === 'attack' && ord.target.alive) ai.target = ord.target;
+  else if (ai.scan <= 0 || !ai.target || !ai.target.alive) {
     ai.scan = 0.8 + Math.random() * 0.8;
     let best = null, bd = ai.sense ?? Infinity;
     for (const o of entities) {
@@ -746,17 +755,37 @@ function updateAI(e, dt) {
   const goal = ai.goal;
   const dGoal = goal ? Math.hypot(goal.x - e.pos.x, goal.z - e.pos.z) : 0;
   const dT = tgt ? Math.hypot(tgt.pos.x - e.pos.x, tgt.pos.z - e.pos.z) : Infinity;
-  if (goal && ai.role === 'attack' && dGoal > state.battle.radius * 0.6) {
+  const R = state.battle ? state.battle.radius : 0;
+  if (ordType === 'follow' && player.alive) {
+    // formación en cuña detrás del jugador
+    const slot = followSlot(e);
+    const d = Math.hypot(slot.x - e.pos.x, slot.z - e.pos.z);
+    if (d > 10) { desired = yawTo(e.pos, slot); e.throttle = d > 30 ? 1 : 0.35 + (d - 10) / 20 * 0.65; }
+    else { desired = player.heading; e.throttle = clamp(player.speed / e.maxSpeed, -0.3, 1); }
+    ai.status = 'SIGUIENDO';
+  } else if (ordType === 'attack' && tgt && tgt.alive) {
+    const toYaw = yawTo(e.pos, tgt.pos);
+    if (dT > ai.range) { desired = toYaw; e.throttle = 1; }
+    else { desired = toYaw + Math.PI / 2 * ai.strafe; e.throttle = 0.75; }
+    ai.status = 'ATACANDO';
+  } else if (ordType === 'point' && goal) {
+    if (dGoal > R * 0.5) { desired = yawTo(e.pos, goal); e.throttle = 1; ai.status = 'AL PUNTO'; }
+    else { desired = yawTo(e.pos, goal) + Math.PI / 2 * ai.strafe; e.throttle = 0.35; ai.status = 'EN EL PUNTO'; }
+  } else if (goal && ai.role === 'attack' && dGoal > R * 0.6) {
     desired = yawTo(e.pos, goal); e.throttle = 1;                   // avanzar hacia el punto
+    ai.status = 'AVANZANDO';
   } else if (goal && ai.role === 'defend' && dGoal > ai.leash) {
     desired = yawTo(e.pos, goal); e.throttle = 1;                   // volver a la zona
+    ai.status = 'REPLEGANDO';
   } else if (tgt && dT < (goal ? 320 : Infinity)) {
+    ai.status = 'COMBATE';
     const toYaw = yawTo(e.pos, tgt.pos);
     if (dT > ai.range + 40) { desired = toYaw; e.throttle = 1; }
     else if (dT < ai.range - 40) { desired = toYaw + Math.PI * 0.75 * ai.strafe; e.throttle = 0.7; }
     else { desired = toYaw + Math.PI / 2 * ai.strafe; e.throttle = 0.75; }
   } else if (goal) {
     desired = yawTo(e.pos, goal) + Math.PI / 2 * ai.strafe; e.throttle = 0.4;  // patrullar el punto
+    ai.status = 'PATRULLANDO';
   }
   if (ai.t < 0) { ai.t = 3 + Math.random() * 4; if (Math.random() < 0.6) ai.strafe *= -1; }
   // atasco -> rodeo
@@ -928,6 +957,14 @@ function drawMessages() {
   }
 }
 
+const isSquadTarget = (e) => state.battleMode && state.battle?.order.type === 'attack' && state.battle.order.target === e;
+function squadTag(x, y) {
+  g.strokeStyle = C.ally; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(x, y - 5); g.lineTo(x + 5, y); g.lineTo(x, y + 5); g.lineTo(x - 5, y); g.closePath(); g.stroke();
+  g.lineWidth = 1;
+  txt(g, 'ESCUADRA', x + 8, y + 3, { size: 7, color: C.ally, glow: 2 });
+}
+
 // aliado: chevrón azul y nombre
 function allyMarker(e, x, y, label) {
   g.fillStyle = C.ally; g.shadowColor = C.ally; g.shadowBlur = 4;
@@ -947,6 +984,7 @@ function drawTopHud() {
     const isT = e === state.target;
     const w = e.kind === 'tank' ? 14 : 20;
     brackets(g, s.x - w / 2, s.y - w / 2, w, w, isT ? C.white : 'rgba(255,90,64,0.8)', 4);
+    if (isSquadTarget(e)) squadTag(s.x, s.y - w / 2 - 12);
     const r = e.armor.CT / e.maxArmor.CT;
     g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(s.x - 10, s.y - w / 2 - 6, 20, 3);
     g.fillStyle = r > 0.5 ? C.main : r > 0.25 ? C.warn : C.bad; g.fillRect(s.x - 10, s.y - w / 2 - 6, 20 * r, 3);
@@ -1019,6 +1057,7 @@ function drawCockpitHud() {
     const w = clamp(1600 / d, 8, 90) * (e.kind === 'tank' ? 0.7 : 1);
     const isT = e === state.target;
     brackets(g, s.x - w / 2, s.y - w / 2, w, w, isT ? C.white : 'rgba(255,90,64,0.85)', Math.max(3, w * 0.2));
+    if (isSquadTarget(e)) squadTag(s.x, s.y - w / 2 - 10);
     if (isT) {
       txt(g, `${e.name}`, s.x + w / 2 + 4, s.y - w / 2 + 8, { size: 9, color: C.white, glow: 3 });
       txt(g, `${Math.round(d)}m`, s.x + w / 2 + 4, s.y - w / 2 + 19, { size: 9, color: C.white, glow: 3 });
@@ -1182,7 +1221,7 @@ function drawHud() {
   if (state.screen === 'menu') { drawMenu(); return; }
   if (state.screen === 'hangar') { drawHangar(); return; }
   if (state.mode === 'top' || state.screen === 'dead' || state.screen === 'result' || state.ejected) drawTopHud(); else drawCockpitHud();
-  if (state.battleMode) drawBattleHud();
+  if (state.battleMode) { drawBattleHud(); if (state.battle && state.screen !== 'result') drawSquadPanel(); }
   if (state.training && state.screen === 'play') drawLessons();
   if (state.thermal) txt(g, '◉ TÉRMICO [V]', VW / 2, state.battleMode ? (state.mode === 'cockpit' && !state.ejected ? 140 : 68) : state.mode === 'cockpit' && state.screen !== 'dead' ? 64 : 16, { size: 10, align: 'center', color: C.warn });
   drawMessages();
@@ -1222,6 +1261,7 @@ function battleMech(type, team, idx) {
     armorMult: 0.9, speedMult: t.speedMult, value: t.value, ai: t.ai,
   });
   e.btype = type;
+  if (team === 'A') e.slot = (idx - 2) % 4;
   const b = state.battle;
   e.ai.goal = b.point;
   e.ai.role = team === b.attackers ? 'attack' : 'defend';
@@ -1267,7 +1307,7 @@ function startBattle() {
     attackers: att, radius: BATTLE.radius, capture: 0, timer: BATTLE.time,
     tickets: { A: BATTLE.tickets, B: BATTLE.tickets }, respawns: [], over: false,
     milestone: 0, contested: false, wasContested: false, inside: { A: 0, B: 0 },
-    deaths: 0, counter: { A: 5, B: 5 },
+    deaths: 0, counter: { A: 5, B: 5 }, order: { type: 'free' },
   };
   // punto ALFA cerca del centro, en seco y libre de edificios
   const tmp = { radius: 14, pos: V() };
@@ -1286,7 +1326,7 @@ function startBattle() {
   ROSTER.B.forEach((t, i) => spawnAtBase(battleMech(t, 'B', i + 1), 'B'));
   state.ejected = false; state.ejectHold = 0; state.deaths = 0;
   msg(att === 'A' ? 'ASALTO — CAPTURAD EL PUNTO ALFA' : 'DEFENSA — PROTEGED EL PUNTO ALFA', C.warn, 5);
-  msg('Z MANTENIDO: EYECCIÓN · B CAMBIA DE VISTA', C.dim, 5);
+  msg('1-4 ÓRDENES A LA ESCUADRA · Z MANTENIDO: EYECCIÓN · B VISTA', C.dim, 6);
 }
 
 function eject(e, isPlayer) {
@@ -1383,6 +1423,11 @@ function updateBattle(dt) {
     b.respawns.splice(i, 1);
     if (r.player) respawnPlayer();
     else spawnAtBase(battleMech(r.type, r.team, ++b.counter[r.team]), r.team);
+  }
+  if (b.order.type === 'attack' && !b.order.target.alive) {
+    b.order = { type: 'free' };
+    msg('BLANCO DE LA ESCUADRA ELIMINADO — LIBRE ACCIÓN', C.ally, 2.5);
+    sfx.radio();
   }
   // final
   if (b.capture >= 100) return endBattle(att, ours ? 'PUNTO ALFA CAPTURADO' : 'EL ENEMIGO HA CAPTURADO EL PUNTO ALFA');
@@ -1491,6 +1536,64 @@ function drawResult() {
   txt(g, `DERRIBOS ${state.kills} · MECHS PERDIDOS ${state.deaths} · PUNTOS ${state.score}`, VW / 2, VH / 2 + 24, { size: 11, align: 'center', color: C.main });
   txt(g, `REFUERZOS RESTANTES  AZUL ${b.tickets.A} · ROJO ${b.tickets.B}`, VW / 2, VH / 2 + 42, { size: 10, align: 'center', color: C.dim, glow: 0 });
   txt(g, 'ENTER HANGAR  ·  M MENÚ PRINCIPAL', VW / 2, VH / 2 + 68, { size: 11, align: 'center', color: C.dim });
+}
+
+// ---------------------------------------------------------------- órdenes de escuadra
+// 1 SEGUIDME · 2 ATACAD MI BLANCO · 3 AL PUNTO · 4 LIBRE ACCIÓN
+const SLOTS = [[-14, 12], [14, 12], [-26, 24], [26, 24]];   // [derecha, atrás] relativo al jugador
+function followSlot(e) {
+  const [ox, oz] = SLOTS[(e.slot ?? 0) % SLOTS.length];
+  const h = player.heading, c = Math.cos(h), sn = Math.sin(h);
+  // derecha = (cos, -sin) · atrás = (sin, cos)
+  return _v3.set(player.pos.x + c * ox + sn * oz, 0, player.pos.z - sn * ox + c * oz).clone();
+}
+const ORDER_KEYS = { Digit1: 'follow', Numpad1: 'follow', Digit2: 'attack', Numpad2: 'attack', Digit3: 'point', Numpad3: 'point', Digit4: 'free', Numpad4: 'free' };
+function orderName(o) {
+  const b = state.battle;
+  if (o.type === 'follow') return 'SEGUIDME';
+  if (o.type === 'attack') return `ATACAD A ${o.target.name}`;
+  if (o.type === 'point') return b.attackers === 'A' ? 'TOMAD EL PUNTO ALFA' : 'DEFENDED EL PUNTO ALFA';
+  return 'LIBRE ACCIÓN';
+}
+function issueOrder(type) {
+  const b = state.battle;
+  if (!b || b.over) return;
+  if (type === 'attack') {
+    if (!state.target || !state.target.alive || !hostile(state.target, player)) { msg('SIN BLANCO FIJADO — PULSA Q PRIMERO', C.warn, 2); sfx.beep(0.5, 300); return; }
+    b.order = { type, target: state.target };
+  } else b.order = { type };
+  msg(`ORDEN: ${orderName(b.order)}`, C.ally, 2.5);
+  sfx.radio();
+  for (const e of entities) if (e.alive && e.ai && e.team === 'A') e.ai.scan = 0;
+  const allies = entities.filter(e => e.alive && e.ai && e.team === 'A');
+  if (allies.length) {
+    const a = allies[Math.floor(Math.random() * allies.length)];
+    const reply = ['RECIBIDO', 'ENTENDIDO', 'EN MARCHA', 'AFIRMATIVO', 'A LA ORDEN'][Math.floor(Math.random() * 5)];
+    setTimeout(() => { if (state.battle === b) { msg(`${a.name}: ${reply}`, C.ally, 2); sfx.radio(); } }, 450);
+  } else msg('NO QUEDAN ALIADOS EN COMBATE', C.dim, 2);
+}
+
+// panel de estado de la escuadra
+function drawSquadPanel() {
+  const b = state.battle;
+  const allies = entities.filter(e => e.team === 'A' && !e.isPlayer && e.ai && (e.alive || e.deadT < 6))
+    .sort((a, c) => (a.slot ?? 0) - (c.slot ?? 0)).slice(0, 4);
+  const cock = state.mode === 'cockpit' && !state.ejected && state.screen === 'play';
+  const w = 176, x = VW - w - 8, y = cock ? 36 : 140;
+  const h = 36 + allies.length * 12 + 14;
+  g.fillStyle = 'rgba(0,8,20,0.6)'; g.fillRect(x, y, w, h);
+  g.strokeStyle = 'rgba(95,168,255,0.45)'; g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  txt(g, 'ESCUADRA', x + 6, y + 11, { size: 9, color: C.ally, glow: 2 });
+  txt(g, `ORDEN: ${orderName(b.order)}`, x + 6, y + 23, { size: 8, color: C.white, glow: 2 });
+  allies.forEach((e, i) => {
+    const yy = y + 36 + i * 12;
+    const r = e.alive ? e.armor.CT / e.maxArmor.CT : 0;
+    txt(g, e.name, x + 6, yy, { size: 8, color: e.alive ? C.ally : 'rgba(95,168,255,0.35)', glow: 0 });
+    g.fillStyle = 'rgba(95,168,255,0.15)'; g.fillRect(x + 58, yy - 6, 40, 4);
+    g.fillStyle = r > 0.5 ? C.main : r > 0.25 ? C.warn : C.bad; g.fillRect(x + 58, yy - 6, 40 * r, 4);
+    txt(g, e.alive ? (e.ai.status ?? '—') : 'EYECTADO', x + w - 6, yy, { size: 7, align: 'right', color: e.alive ? C.dim : C.bad, glow: 0 });
+  });
+  txt(g, '1 SEGUIR 2 ATACAR 3 PUNTO 4 LIBRE', x + 6, y + h - 4, { size: 7, color: C.dim, glow: 0 });
 }
 
 // ---------------------------------------------------------------- entrenamiento
@@ -2042,6 +2145,7 @@ window.addEventListener('keydown', (e) => {
     if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
     if (e.code === 'KeyV' && !e.repeat) toggleThermal();
     if (state.battleMode && !e.repeat && e.code === 'KeyB') switchView();
+    if (state.battleMode && !e.repeat && ORDER_KEYS[e.code]) issueOrder(ORDER_KEYS[e.code]);
     if (state.training && !e.repeat) {
       if (e.code === 'KeyB') switchView();
       if (e.code === 'KeyO') { state.trainArmed = !state.trainArmed; sfx.beep(0.7, state.trainArmed ? 400 : 900); msg(state.trainArmed ? 'BLANCOS ARMADOS: DISPARAN' : 'BLANCOS DESARMADOS', state.trainArmed ? C.bad : C.main, 2); }

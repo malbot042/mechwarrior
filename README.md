@@ -55,6 +55,17 @@ Tú (LANZA-1) y cuatro mechs aliados con IA (LANZA-2…5, en azul) contra cinco 
 - **HUD de batalla**: objetivo y progreso de captura, tiempo, refuerzos y mechs vivos por equipo, marcador ALFA con distancia (se pega al borde de la pantalla si queda fuera), aliados con chevrón azul y en el radar.
 - **Puntuación**: los derribos que haces tú cuentan entero; los de la escuadra, una parte.
 
+#### Órdenes a la escuadra
+
+| Tecla | Orden | Qué hacen tus aliados |
+|-------|-------|-----------------------|
+| **1** | SEGUIDME | Forman en cuña detrás de ti, igualan tu velocidad y disparan a lo que tengan a tiro |
+| **2** | ATACAD MI BLANCO | Todos se lanzan contra tu blanco fijado (fíjalo antes con Q). Al destruirlo vuelven a libre acción |
+| **3** | TOMAD / DEFENDED EL PUNTO | Van al punto ALFA y se quedan dentro (en asalto capturan, en defensa lo bloquean) |
+| **4** | LIBRE ACCIÓN | Comportamiento por defecto según el objetivo de la misión |
+
+Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (bajo el radar en vista táctica, arriba a la derecha en cabina) muestra la orden activa y, por aliado, blindaje y estado (SIGUIENDO, ATACANDO, AL PUNTO, COMBATE, AVANZANDO, EYECTADO…). El blanco ordenado lleva una marca azul **ESCUADRA** en el HUD.
+
 ### Controles
 
 | Tecla | Acción |
@@ -74,6 +85,7 @@ Tú (LANZA-1) y cuatro mechs aliados con IA (LANZA-2…5, en azul) contra cinco 
 | T | Paleta CRT: color / ámbar / fósforo verde |
 | Esc / P | Pausa (Enter continuar, H hangar, M menú) |
 | B | Entrenamiento y batalla: cambiar vista táctica / cabina |
+| 1 · 2 · 3 · 4 | Batalla: órdenes a la escuadra (seguidme · atacad mi blanco · al punto · libre) |
 | Z (mantener) | Batalla: eyección voluntaria |
 | O · N · I | Sólo entrenamiento: blancos armados · nueva diana · panel de lecciones |
 
@@ -147,7 +159,7 @@ Se eligen en el panel **MISIÓN** del hangar (filas ZONA y HORA); se pueden comb
 ```
 index.html        importmap + arranque
 lib/              three.js r187 (vendorizado, licencia MIT)
-js/main.js        bucle, estado, entidades, armas, IA por equipos, HUD, hangar (UI), entrenamiento, batalla 5 vs 5, eyección, visión térmica
+js/main.js        bucle, estado, entidades, armas, IA por equipos, HUD, hangar (UI), entrenamiento, batalla 5 vs 5, órdenes de escuadra, eyección, visión térmica
 js/data.js        catálogo de armas y chasis, cálculo de estadísticas
 js/hangar.js      escena 3D del hangar
 js/crt.js         shader CRT de post-proceso (incluye paleta térmica)
@@ -160,7 +172,7 @@ js/audio.js       efectos de sonido sintetizados
 
 ## Ideas para seguir
 
-- Saltos (jump jets), pantalla de mapa, órdenes a la escuadra (seguirme, atacar mi blanco, defender)
+- Saltos (jump jets), pantalla de mapa, órdenes individuales por aliado
 - Más objetivos: varios puntos (conquista), escolta de convoy
 - Progresión: créditos por oleada para desbloquear chasis y armas
 - Gamepad, ajustes de sensibilidad, intensidad del efecto CRT
