@@ -65,6 +65,8 @@ export const sfx = {
   beep(v = 1, f = 880) { if (!ok(v)) return; const o = out(v); osc('square', f, f, 0.09, 0.08, o); },
   shutdown() { if (!ctx) return; const o = out(1); osc('sawtooth', 400, 30, 1.6, 0.2, o); },
   powerup() { if (!ctx) return; const o = out(1); osc('sawtooth', 40, 500, 1.2, 0.12, o); },
+  tree(v = 1) { if (!ok(v)) return; const o = out(v); noise('bandpass', 1800, 300, 1.2, 0.5, 0.45, o); noise('lowpass', 400, 80, 1, 0.8, 0.4, o); },
+  splash(v = 1) { if (!ok(v)) return; const o = out(v); noise('highpass', 900, 2600, 0.7, 0.35, 0.25, o); },
   ui() { if (!ctx) return; const o = out(1); osc('square', 660, 990, 0.06, 0.06, o); },
 };
 

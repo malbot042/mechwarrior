@@ -2,7 +2,7 @@
 // Dos modos independientes: TÁCTICO (vista cenital) y CABINA (primera persona).
 import * as THREE from 'three';
 import { createCRT } from './crt.js';
-import { buildWorld, heightAt, BOUND, mulberry32 } from './world.js';
+import { buildWorld, heightAt, BOUND, waterLevel, ZONES, TIMES, HEAT } from './world.js';
 import { buildMech, buildTank, animateMech } from './models.js';
 import { buildCockpit } from './cockpit.js';
 import { buildHangar } from './hangar.js';
@@ -35,9 +35,15 @@ const scene = new THREE.Scene();
 const FOV_COCKPIT = 70, FOV_TOP = 40;
 const camera = new THREE.PerspectiveCamera(FOV_TOP, 16 / 9, 0.05, 1400);
 scene.add(camera);
-const world = buildWorld(scene);
+let world = buildWorld(scene, 'desierto', 'dusk');
+function ensureWorld(zone, time) {
+  if (world.zone === zone && world.time === time) return;
+  world.dispose();
+  world = buildWorld(scene, zone, time);
+}
 const cockpit = buildCockpit();
 camera.add(cockpit.group);
+cockpit.group.userData.keep = true; // la cabina no se ve en térmico
 cockpit.group.visible = false;
 
 function resize() {
@@ -171,12 +177,14 @@ function enemyMech(type) {
 }
 
 function placeFree(e, x, z) {
-  for (let tries = 0; tries < 30; tries++) {
-    const free = !world.obstacles.some(o => o.alive &&
+  for (let tries = 0; tries < 60; tries++) {
+    const dry = heightAt(x, z) > waterLevel() + 0.8;
+    const free = dry && !world.obstacles.some(o => o.alive &&
       x > o.box.min.x - e.radius - 2 && x < o.box.max.x + e.radius + 2 &&
       z > o.box.min.z - e.radius - 2 && z < o.box.max.z + e.radius + 2);
     if (free) break;
-    x += (Math.random() - 0.5) * 30; z += (Math.random() - 0.5) * 30;
+    const r = 20 + tries * 4;
+    x += (Math.random() - 0.5) * r; z += (Math.random() - 0.5) * r;
   }
   e.pos.set(clamp(x, -BOUND, BOUND), 0, clamp(z, -BOUND, BOUND));
   e.pos.y = heightAt(e.pos.x, e.pos.z);
@@ -205,6 +213,7 @@ function spawnWave() {
 }
 
 function clearWorld() {
+  if (state.headlight) { scene.remove(state.headlight, state.headlight.target); state.headlight.dispose(); state.headlight = null; }
   for (const e of entities) scene.remove(e.model.root);
   entities = [];
   for (const arr of [projectiles, beams, particles]) { for (const p of arr) scene.remove(p.mesh); arr.length = 0; }
@@ -217,12 +226,21 @@ function startGame(mode) {
   state.mode = mode;
   state.wave = 0; state.score = 0; state.kills = 0; state.msgs = []; state.waveTimer = 0;
   state.target = null; state.hitDirs = [];
+  ensureWorld(hangar.zone, hangar.time);
   player = newPlayer();
+  if (world.headlights) {
+    // focos del mech para la noche (se colocan cada frame en la cabina)
+    const sl = new THREE.SpotLight(0xfff0d0, 900, 220, 0.45, 0.55, 1.3);
+    scene.add(sl, sl.target);
+    state.headlight = sl;
+  }
   placeFree(player, 0, 0);
   entities.push(player);
   state.screen = 'play';
   applyMode();
   if (mode === 'cockpit') lockPointer();
+  state.thermal = false;
+  if (world.time === 'night') setTimeout(() => msg('VISIBILIDAD NOCTURNA — PULSE V PARA VISIÓN TÉRMICA', C.warn, 5), 1200);
   spawnWave();
   msg(mode === 'top' ? 'MODO TÁCTICO — FLECHAS APUNTAR · Q BLANCO' : 'MODO CABINA — FLECHAS APUNTAR · Q BLANCO', C.cyan, 4);
   state.track = false; state.aimDist = 60;
@@ -331,6 +349,7 @@ function damageObs(o, amount, point) {
     m.scale.y = 0.25;
     m.position.y = o.y0 + o.h * 0.125;
     m.material.emissiveIntensity = 0;
+    m.userData.heat = HEAT.ruin;
     m.material.color.multiplyScalar(0.35);
     const c = m.position.clone(); c.y = o.y0 + o.h * 0.4;
     explosion(c, 1.6);
@@ -378,6 +397,11 @@ function smoke(pos, size = 2) {
 function spark(pos, color, n = 6) {
   for (let i = 0; i < n; i++)
     particle(pos, V().set(Math.random() - 0.5, Math.random() * 0.8, Math.random() - 0.5).multiplyScalar(30), color, 0.3 + Math.random() * 0.3, 0.3, -0.5, true, 40);
+}
+function splash(pos, n = 8, vol = 0) {
+  for (let i = 0; i < n; i++)
+    particle(pos, V().set(Math.random() - 0.5, 1.2 + Math.random(), Math.random() - 0.5).multiplyScalar(8), 0xb8d0e0, 0.6 + Math.random() * 0.4, 0.4, 0.6, false, 25);
+  if (vol) sfx.splash(vol);
 }
 function explosion(pos, scale = 1) {
   const n = Math.round(10 * scale + 4);
@@ -452,7 +476,7 @@ function fireWeapon(e, w, aimPoint, target) {
     beam(M, tr.point, d.color, d.width ?? 0.32);
     if (tr.ent) damage(tr.ent, d.dmg, tr.point, e);
     else if (tr.obs) damageObs(tr.obs, d.dmg, tr.point);
-    else if (tr.dist < d.range) spark(tr.point, 0xff6030, 4);
+    else if (tr.dist < d.range) { if (tr.point.y < waterLevel()) splash(tr.point, 6, vol); else spark(tr.point, 0xff6030, 4); }
     sfx.laser(vol * (e.isPlayer ? 0.8 : 0.6));
   } else if (d.type === 'bolt' || d.type === 'shell') {
     projectile({ type: d.type, pos: M, vel: dir.multiplyScalar(d.speed), dmg: d.dmg, owner: e, color: d.color, size: d.size, life: d.range / d.speed + 0.3 });
@@ -471,7 +495,7 @@ function fireWeapon(e, w, aimPoint, target) {
 
 // ---------------------------------------------------------------- movimiento
 function moveEntity(e, dt) {
-  const target = e.throttle * e.maxSpeed * (e.shutdown > 0 ? 0 : 1);
+  const target = e.throttle * e.maxSpeed * (e.shutdown > 0 ? 0 : 1) * (e.inWater ? 0.6 : 1);
   e.speed += clamp(target - e.speed, -12 * dt, 7 * dt);
   const f = fwd(e.heading, _v1);
   const px = e.pos.x, pz = e.pos.z;
@@ -496,10 +520,22 @@ function moveEntity(e, dt) {
   }
   e.pos.x = clamp(e.pos.x, -BOUND, BOUND); e.pos.z = clamp(e.pos.z, -BOUND, BOUND);
   e.pos.y = heightAt(e.pos.x, e.pos.z);
+  e.inWater = waterLevel() - e.pos.y > 0.6;
+  // derribar árboles al pasar
+  if (Math.abs(e.speed) > 1.5) {
+    const sg = Math.sign(e.speed);
+    const n = world.trample(e.pos.x, e.pos.z, e.radius * 0.85, f.x * sg, f.z * sg);
+    if (n) {
+      sfx.tree(e.isPlayer ? 0.7 : volAt(e.pos) * 0.6);
+      for (let i = 0; i < n * 4; i++) particle(_v3.set(e.pos.x, e.pos.y + 5 + Math.random() * 4, e.pos.z), V().set(Math.random() - 0.5, Math.random(), Math.random() - 0.5).multiplyScalar(6), 0x3a5a2a, 1.2, 0.35, 0, false, 12, boxGeo);
+      if (e.isPlayer) state.shake = Math.min(1, state.shake + 0.15);
+    }
+  }
   e.realSpeed = Math.hypot(e.pos.x - px, e.pos.z - pz) / Math.max(dt, 1e-4);
 
   // calor
-  e.heat = Math.max(0, e.heat - e.dissip * dt * (e.shutdown > 0 ? 2.5 : 1) * (e.speed > e.maxSpeed * 0.7 ? 0.8 : 1));
+  e.heat = Math.max(0, e.heat - e.dissip * dt * (e.shutdown > 0 ? 2.5 : 1) * (e.speed > e.maxSpeed * 0.7 ? 0.8 : 1) * (e.inWater ? 1.7 : 1));
+  e.model.root.userData.heat = (e.kind === 'mech' ? 0.72 : 0.66) + e.heat / 100 * 0.28;
   if (e.shutdown > 0) {
     e.shutdown -= dt;
     if (e.shutdown <= 0 && e.isPlayer) { sfx.powerup(); msg('REACTOR EN LÍNEA', C.main, 2); }
@@ -524,6 +560,7 @@ function moveEntity(e, dt) {
       if (amt > 0.15) {
         const v = e.isPlayer ? (state.mode === 'cockpit' ? 0.8 : 0.45) : volAt(e.pos) * 0.5;
         sfx.step(v * amt);
+        if (e.inWater) splash(_v3.set(e.pos.x, waterLevel(), e.pos.z), 6, v);
         if (e.isPlayer && state.mode === 'cockpit') state.shake = Math.min(1, state.shake + 0.12 * amt);
       }
     }
@@ -688,10 +725,12 @@ function updateAI(e, dt) {
   const d3 = dir.length(); dir.normalize();
   const tr = traceSegment(eye, dir, d3 + 2, e);
   if (tr.ent !== player) { ai.fireT = 0.5; return; }
+  const cover = world.forestCover(player.pos.x, player.pos.z) >= 4;
+  if (cover && d3 > 150) { ai.fireT = 0.6; return; }   // oculto en el bosque
   const usable = e.weapons.filter(w => w.cd <= 0 && e.armor[w.sec] > 0 && d3 < w.def.range);
   if (!usable.length) return;
   const w = usable[Math.floor(Math.random() * usable.length)];
-  const spread = (1 - ai.skill) * (d3 * 0.05 + player.speed * 0.25) + 0.8;
+  const spread = ((1 - ai.skill) * (d3 * 0.05 + player.speed * 0.25) + 0.8) * (cover ? 1.8 : 1);
   const aim = pc.add(V().set((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread * 0.6, (Math.random() - 0.5) * spread));
   fireWeapon(e, w, aim, player);
   ai.fireT = 0.35 + Math.random() * 0.9;
@@ -723,7 +762,8 @@ function updateProjectiles(dt) {
       if (tr.ent) damage(tr.ent, p.dmg, tr.point, p.owner);
       else if (tr.obs) damageObs(tr.obs, p.dmg, tr.point);
       const sc = p.type === 'bolt' ? 0.7 : p.type === 'shell' ? 0.45 : 0.35;
-      explosion(tr.point, sc);
+      if (!tr.ent && !tr.obs && tr.point.y < waterLevel()) splash(_v3.copy(tr.point).setY(waterLevel()), 14, volAt(tr.point));
+      else explosion(tr.point, sc);
       if (p.type === 'bolt') spark(tr.point, 0x80d0ff, 10);
       done = true;
     } else p.mesh.position.addScaledVector(p.vel, dt);
@@ -754,6 +794,7 @@ function updateEffects(dt) {
 
 function updateDead(e, dt) {
   e.deadT += dt;
+  e.model.root.userData.heat = Math.max(0.5, 0.95 - e.deadT * 0.03);
   const m = e.model;
   if (e.kind === 'mech') {
     const k = Math.min(1, e.deadT / 1.6);
@@ -1044,7 +1085,8 @@ function drawMenu() {
     'W/S ACELERADOR · A/D GIRAR PIERNAS · X PARAR · C CENTRAR TORSO',
     'FLECHAS APUNTAR TORSO · Q/TAB SIGUIENTE BLANCO · R SEGUIMIENTO',
     'ESPACIO/J LÁSERES · F/K PPC · E/L MISILES LRM',
-    'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA · RUEDA ZOOM · T PALETA · ESC PAUSA',
+    'V VISIÓN TÉRMICA · T PALETA CRT · ESC PAUSA',
+    'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA · RUEDA ZOOM',
   ];
   lines.forEach((l, i) => txt(g, l, cx, 350 + i * 16, { size: 10, align: 'center', color: C.main, glow: 2 }));
   if (Math.sin(state.time * 4) > 0) txt(g, '↑↓ + ENTER  ·  O PULSE 1 / 2', cx, 432, { size: 12, align: 'center', color: C.white });
@@ -1057,6 +1099,7 @@ function drawHud() {
   if (state.screen === 'menu') { drawMenu(); return; }
   if (state.screen === 'hangar') { drawHangar(); return; }
   if (state.mode === 'top' || state.screen === 'dead') drawTopHud(); else drawCockpitHud();
+  if (state.thermal) txt(g, '◉ TÉRMICO [V]', VW / 2, state.mode === 'cockpit' && state.screen !== 'dead' ? 64 : 16, { size: 10, align: 'center', color: C.warn });
   drawMessages();
   if (player.shutdown > 0 && state.screen === 'play') {
     txt(g, `APAGADO — REINICIO EN ${player.shutdown.toFixed(1)}s`, VW / 2, VH * 0.6, { size: 14, align: 'center', color: C.bad });
@@ -1075,13 +1118,58 @@ function drawHud() {
   }
 }
 
+// ---------------------------------------------------------------- visión térmica
+// Cada objeto con userData.heat (0..1) se dibuja con un material gris según su
+// calor; el shader CRT convierte después la luminancia a la paleta térmica.
+const thermalMats = new Map();
+function thermalMat(h) {
+  const k = Math.round(clamp(h, 0, 1) * 40);
+  let m = thermalMats.get(k);
+  if (!m) {
+    const v = Math.pow(k / 40, 2.2);
+    m = new THREE.MeshLambertMaterial({ color: new THREE.Color(v * 0.45, v * 0.45, v * 0.45), emissive: new THREE.Color(v * 0.8, v * 0.8, v * 0.8), flatShading: true });
+    thermalMats.set(k, m);
+  }
+  return m;
+}
+const swapped = [];
+const fogSave = new THREE.Color();
+function swapThermal(o, h) {
+  if (o.userData.keep || o.userData.sky) return;
+  if (o.userData.heat !== undefined) h = o.userData.heat;
+  if (h !== undefined && o.isMesh) { swapped.push(o, o.material); o.material = thermalMat(h); }
+  for (const c of o.children) swapThermal(c, h);
+}
+function beginThermal() {
+  swapped.length = 0;
+  swapThermal(scene, undefined);
+  world.sky.visible = false;
+  fogSave.copy(scene.fog.color);
+  scene.fog.color.setRGB(0, 0, 0);
+}
+function endThermal() {
+  for (let i = 0; i < swapped.length; i += 2) swapped[i].material = swapped[i + 1];
+  swapped.length = 0;
+  world.sky.visible = true;
+  scene.fog.color.copy(fogSave);
+}
+function toggleThermal() {
+  state.thermal = !state.thermal;
+  sfx.beep(0.7, state.thermal ? 1500 : 700);
+  msg(state.thermal ? 'VISIÓN TÉRMICA ACTIVA' : 'VISIÓN NORMAL', C.cyan, 1.5);
+}
+
 // ---------------------------------------------------------------- hangar
 const SAVE_KEY = 'steelhorizon.hangar.v1';
-const hangar = { chassis: 'centinela', cfgs: {}, row: 0 };
-const HROWS = MOUNTS.length + 2;   // chasis + monturas + desplegar
+const hangar = { chassis: 'centinela', cfgs: {}, row: 0, zone: 'desierto', time: 'dusk' };
+const HROWS = MOUNTS.length + 4;   // chasis + monturas + zona + hora + desplegar
+const ROW_ZONE = MOUNTS.length + 1, ROW_TIME = MOUNTS.length + 2;
+const ZONE_IDS = Object.keys(ZONES), TIME_IDS = Object.keys(TIMES);
 try {
   const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
   if (saved && saved.cfgs) { hangar.chassis = saved.chassis; hangar.cfgs = saved.cfgs; }
+  if (saved && ZONES[saved.zone]) hangar.zone = saved.zone;
+  if (saved && TIMES[saved.time]) hangar.time = saved.time;
 } catch (_) { /* sin almacenamiento */ }
 
 function cfgFor(ch) {
@@ -1092,7 +1180,7 @@ function cfgFor(ch) {
   return cfg;
 }
 function saveHangar() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ chassis: hangar.chassis, cfgs: hangar.cfgs })); } catch (_) { /* ignorar */ }
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ chassis: hangar.chassis, cfgs: hangar.cfgs, zone: hangar.zone, time: hangar.time })); } catch (_) { /* ignorar */ }
 }
 
 const hangar3d = buildHangar();
@@ -1121,6 +1209,12 @@ function hangarChange(dir) {
   if (hangar.row === 0) {
     const i = CHASSIS.indexOf(ch);
     hangar.chassis = CHASSIS[(i + dir + CHASSIS.length) % CHASSIS.length].id;
+  } else if (hangar.row === ROW_ZONE) {
+    hangar.zone = ZONE_IDS[(ZONE_IDS.indexOf(hangar.zone) + dir + ZONE_IDS.length) % ZONE_IDS.length];
+    sfx.ui(); saveHangar(); return;
+  } else if (hangar.row === ROW_TIME) {
+    hangar.time = TIME_IDS[(TIME_IDS.indexOf(hangar.time) + dir + TIME_IDS.length) % TIME_IDS.length];
+    sfx.ui(); saveHangar(); return;
   } else if (hangar.row <= MOUNTS.length) {
     const m = MOUNTS[hangar.row - 1];
     const cfg = cfgFor(ch);
@@ -1200,6 +1294,19 @@ function drawHangar() {
   txt(g, `ALFA COMPLETA → ${secs.toFixed(1)} s PARA DISIPAR`, lx + 10, ly + 230, { size: 9, color: secs > 4 ? C.warn : C.dim, glow: 0 });
   txt(g, `ALCANCE MÁX ${st.maxRange} m`, lx + 10, ly + 246, { size: 9, color: C.dim, glow: 0 });
 
+  // ---- panel de misión: zona y hora
+  const my = ly + 270;
+  frame(g, lx, my, PW, 76, C.dim, 'MISIÓN');
+  [[ROW_ZONE, 'ZONA', ZONES[hangar.zone].name], [ROW_TIME, 'HORA', TIMES[hangar.time].name]].forEach(([r, k, v], i) => {
+    const y = my + 4 + i * 35;
+    if (sel(r)) { g.fillStyle = 'rgba(134,255,156,0.10)'; g.fillRect(lx + 2, y, PW - 4, 32); }
+    txt(g, k, lx + 10, y + 20, { size: 9, color: C.dim, glow: 0 });
+    txt(g, '◄', lx + 52, y + 21, { size: 12, color: sel(r) ? C.white : C.faint });
+    txt(g, v, lx + 52 + (PW - 72) / 2, y + 21, { size: 12, align: 'center', color: sel(r) ? C.white : C.main });
+    txt(g, '►', lx + PW - 10, y + 21, { size: 12, align: 'right', color: sel(r) ? C.white : C.faint });
+    hangarRects.push({ x: lx, y, w: PW, h: 32, row: r, arrows: true });
+  });
+
   // ---- panel derecho: armamento
   const rx = VW - PW - 12, ry = 52;
   frame(g, rx, ry, PW, 262, C.dim, 'ARMAMENTO');
@@ -1228,6 +1335,17 @@ function drawHangar() {
     txt(g, `DAÑO ${dmg}   CALOR ${sw.heat}   RECARGA ${sw.cd}s`, rx + 10, dy + 24, { size: 9, glow: 1 });
     txt(g, `ALCANCE ${sw.range}m   PESO ${sw.tons}t`, rx + 10, dy + 38, { size: 9, glow: 1 });
     txt(g, 'G CAMBIA GRUPO DE DISPARO', rx + 10, dy + 56, { size: 8, color: C.dim, glow: 0 });
+  } else if (hangar.row === ROW_ZONE) {
+    const zz = ZONES[hangar.zone];
+    txt(g, `${zz.name}: ${zz.desc}`.toUpperCase(), rx + 10, dy + 8, { size: 9, color: C.white, glow: 1 });
+    if (zz.waterY !== null) txt(g, 'AGUA: −40% VELOCIDAD, +70% REFRIGERACIÓN', rx + 10, dy + 24, { size: 8, color: C.cyan, glow: 0 });
+    if (zz.forest > 0.3) txt(g, 'BOSQUE: COBERTURA, LOS ÁRBOLES CAEN', rx + 10, dy + 38, { size: 8, color: C.main, glow: 0 });
+  } else if (hangar.row === ROW_TIME) {
+    txt(g, TIMES[hangar.time].name, rx + 10, dy + 8, { size: 10, color: C.white, glow: 1 });
+    if (hangar.time === 'night') {
+      txt(g, 'VISIBILIDAD REDUCIDA · FOCOS ENCENDIDOS', rx + 10, dy + 24, { size: 8, color: C.warn, glow: 0 });
+      txt(g, 'V ACTIVA LA VISIÓN TÉRMICA', rx + 10, dy + 38, { size: 8, color: C.cyan, glow: 0 });
+    } else txt(g, 'V VISIÓN TÉRMICA DISPONIBLE', rx + 10, dy + 24, { size: 8, color: C.dim, glow: 0 });
   } else if (sm) {
     txt(g, `MONTURA ${ch.hard[sm].split('').map(c => SLOT_NAME[c]).join(' / ')}`, rx + 10, dy + 8, { size: 9, color: C.dim, glow: 0 });
   } else {
@@ -1236,9 +1354,9 @@ function drawHangar() {
   }
 
   // ---- carga de armas
-  const bw = Math.min(420, VW - 40), bx = VW / 2 - bw / 2, by = VH - 112;
+  const bw = Math.max(200, Math.min(380, VW - 2 * PW - 64)), bx = VW / 2 - bw / 2, by = VH - 112;
   txt(g, `CARGA DE ARMAS  ${st.tons} / ${ch.weaponTons} t`, bx, by - 6, { size: 11 });
-  txt(g, st.free > 0 ? `${st.free} t LIBRES → +${(st.free * HEATSINK_PER_TON).toFixed(1)} DISIPACIÓN` : 'CARGA COMPLETA', bx + bw, by - 6, { size: 9, align: 'right', color: st.free > 0 ? C.cyan : C.warn, glow: 2 });
+  txt(g, st.free > 0 ? `${st.free} t LIBRES → +${(st.free * HEATSINK_PER_TON).toFixed(1)} DISIPACIÓN` : 'CARGA COMPLETA', VW / 2, by + 24, { size: 9, align: 'center', color: st.free > 0 ? C.cyan : C.warn, glow: 2 });
   const seg = bw / ch.weaponTons;
   for (let i = 0; i < ch.weaponTons; i++) {
     g.fillStyle = i < st.tons ? C.main : 'rgba(95,224,255,0.25)';
@@ -1322,7 +1440,7 @@ function frameLoop(now) {
 
   updateCamera(dt);
   camera.updateMatrixWorld();
-  world.update(player ? player.pos : V(), camera);
+  world.update(player ? player.pos : V(), camera, state.screen === 'pause' ? 0 : dt, state.time);
 
   if (cockpit.group.visible && player) {
     cockpit.update(dt, state.time, {
@@ -1344,13 +1462,27 @@ function frameLoop(now) {
   u.uShake.value = state.shake;
   u.uFlash.value = state.flash;
   u.uPalette.value = state.palette;
+  u.uThermal.value = state.thermal && state.screen !== 'menu' && state.screen !== 'hangar' ? 1 : 0;
   u.uStatic.value = player && player.shutdown > 0 && state.screen === 'play' ? 0.25 : (state.screen === 'dead' ? 0.12 : 0);
 
   renderer.setRenderTarget(rt);
   if (state.screen === 'hangar') {
     hangar3d.update(dt, camera.aspect, chassisById(hangar.chassis).scale);
     renderer.render(hangar3d.scene, hangar3d.camera);
-  } else renderer.render(scene, camera);
+  } else {
+    if (state.headlight && player) {
+      const hl = state.headlight;
+      player.model.cockpit.getWorldPosition(hl.position);
+      const y = player.heading + player.torsoYaw, pt = player.pitch;
+      // por delante y por debajo de la cabina para no iluminar el interior
+      hl.position.x -= Math.sin(y) * 4; hl.position.z -= Math.cos(y) * 4; hl.position.y -= 1.5;
+      hl.target.position.set(hl.position.x - Math.sin(y) * Math.cos(pt) * 40, hl.position.y + Math.sin(pt) * 40 - 5, hl.position.z - Math.cos(y) * Math.cos(pt) * 40);
+    }
+    const thermal = state.thermal && state.screen !== 'menu';
+    if (thermal) beginThermal();
+    renderer.render(scene, camera);
+    if (thermal) endThermal();
+  }
   crt.render();
 }
 
@@ -1379,6 +1511,7 @@ window.addEventListener('keydown', (e) => {
     if (!e.repeat || e.code.startsWith('Arrow')) hangarKey(e.code);
   } else if (state.screen === 'play') {
     if ((e.code === 'KeyQ' || e.code === 'Tab') && !e.repeat) cycleTarget();
+    if (e.code === 'KeyV' && !e.repeat) toggleThermal();
     if (e.code === 'KeyR' && !e.repeat) {
       if (state.track) state.track = false;
       else if (state.target && state.target.alive) { state.track = true; state.input = 'keys'; }
@@ -1452,4 +1585,4 @@ document.addEventListener('pointerlockchange', () => {
 setupMenuScene();
 requestAnimationFrame(frameLoop);
 // acceso para depuración
-window.__game = { state, hangar, get player() { return player; }, get entities() { return entities; }, startGame, enterHangar };
+window.__game = { state, hangar, heightAt, get world() { return world; }, get player() { return player; }, get entities() { return entities; }, startGame, enterHangar };

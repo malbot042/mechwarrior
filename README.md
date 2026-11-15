@@ -37,6 +37,7 @@ Se puede jugar **solo con teclado** (el ratón es opcional).
 | F / K | Grupo de disparo G2 |
 | E / L | Grupo de disparo G3 |
 | X | Parar · C centrar torso |
+| V | Visión térmica on/off |
 | T | Paleta CRT: color / ámbar / fósforo verde |
 | Esc / P | Pausa (Enter continuar, H hangar, M menú) |
 
@@ -46,7 +47,7 @@ Sin seguimiento activo, cualquier enemigo que quede dentro del cono de tiro del 
 
 ## Hangar
 
-Después de elegir modo entras al **hangar**, donde configuras el mech antes de desplegar. Se maneja con teclado (↑↓ elegir fila, ←→ cambiar, G grupo de disparo, R restablecer, Enter desplegar, Esc menú) o haciendo clic en las flechas. La configuración se guarda en el navegador.
+Después de elegir modo entras al **hangar**, donde configuras el mech y eliges la zona y la hora de la misión antes de desplegar. Se maneja con teclado (↑↓ elegir fila, ←→ cambiar, G grupo de disparo, R restablecer, Enter desplegar, Esc menú) o haciendo clic en las flechas. La configuración se guarda en el navegador.
 
 | Chasis | Clase | Tonelaje | Velocidad | Carga de armas | Monturas (LA / LT / RT / RA) |
 |--------|-------|----------|-----------|----------------|------------------------------|
@@ -71,6 +72,26 @@ Tipos de montura: **E** energía, **B** balística, **M** misiles. Cada montura 
 
 Las armas se ven en el modelo 3D (cañones, bobinas de PPC, lanzamisiles en el hombro…) y cambian al instante en el hangar. El panel muestra velocidad, blindaje, disipación, daño alfa, daño por segundo y cuánto tardas en disipar una andanada completa.
 
+## Zonas, hora del día y visión térmica
+
+Se eligen en el panel **MISIÓN** del hangar (filas ZONA y HORA); se pueden combinar libremente.
+
+| Zona | Terreno |
+|------|---------|
+| DESIERTO ROJO | Dunas, ruinas industriales, árboles muertos dispersos |
+| VALLE FLUVIAL | Dos ríos, lagos, arboledas de pinos y frondosos |
+| BOSQUE BOREAL | Bosque muy denso de coníferas cruzado por un río |
+
+| Hora | Efecto |
+|------|--------|
+| DÍA | Cielo azul, buena visibilidad |
+| ATARDECER | Luz rasante naranja, ventanas encendidas |
+| NOCHE | Luna y estrellas, niebla oscura, visibilidad corta; el mech enciende focos |
+
+- **Agua**: vadear ríos y lagos reduce la velocidad un 40 % pero **refrigera un 70 % más rápido** (como en BattleTech). Salpicaduras al caminar y en los impactos.
+- **Bosques**: los árboles **caen** cuando un mech o tanque los atraviesa. Estar dentro de un bosque da **cobertura**: los enemigos fallan más y no te disparan a más de 150 m.
+- **Visión térmica (V)**: renderiza cada objeto según su temperatura con paleta *ironbow* (negro → morado → rojo → naranja → blanco). Los mechs brillan más cuanto más calor acumulan, los restos humean calientes, el agua y el terreno quedan fríos. Imprescindible de noche.
+
 ## Sistemas implementados
 
 - **Torso independiente de las piernas**, como en BattleTech.
@@ -81,7 +102,7 @@ Las armas se ven en el modelo 3D (cañones, bobinas de PPC, lanzamisiles en el h
 - **Oleadas** crecientes con reparación parcial entre ellas.
 - **Edificios destructibles** que bloquean disparos y movimiento.
 - **Cabina 3D**: marco de parabrisas, salpicadero con 3 pantallas vivas (daños, radar, armas/calor), palanca de aceleración y joystick que se mueven con tus acciones, botonera parpadeante y luces de aviso.
-- **CRT**: scanlines, máscara de apertura RGB, aberración cromática, bloom de fósforo, ruido, parpadeo, banda de refresco, sacudida al recibir impactos. El HUD también pasa por el filtro.
+- **CRT**: paleta térmica integrada en el shader, scanlines, máscara de apertura RGB, aberración cromática, bloom de fósforo, ruido, parpadeo, banda de refresco, sacudida al recibir impactos. El HUD también pasa por el filtro.
 - **Sonido** sintetizado con WebAudio (sin archivos).
 
 ## Estructura
@@ -93,7 +114,7 @@ js/main.js        bucle, estado, entidades, armas, IA, HUD, hangar (UI)
 js/data.js        catálogo de armas y chasis, cálculo de estadísticas
 js/hangar.js      escena 3D del hangar
 js/crt.js         shader CRT de post-proceso
-js/world.js       terreno, cielo, luces, edificios
+js/world.js       zonas y horas: terreno, ríos/agua, bosques instanciados, cielo, luces, edificios
 js/models.js      modelos low-poly de mech (armas visibles según configuración) y tanque
 js/cockpit.js     interior de cabina (hijo de la cámara)
 js/hud.js         dibujo 2D: radar, esquema de daños, armas, calor
@@ -103,5 +124,4 @@ js/audio.js       efectos de sonido sintetizados
 ## Ideas para seguir
 
 - Saltos (jump jets), pantalla de mapa, waypoints y misiones con objetivos
-- Más variedad de terreno (ríos, bosques, noche con visión térmica)
 - Gamepad, ajustes de sensibilidad, intensidad del efecto CRT

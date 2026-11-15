@@ -14,13 +14,25 @@ uniform int   uPalette;  // 0 color, 1 ámbar, 2 verde
 uniform float uShake;
 uniform float uFlash;
 uniform float uStatic;
+uniform float uThermal;
 varying vec2 vUv;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
 
+// paleta térmica "ironbow": frío negro/azul -> morado -> rojo -> naranja -> blanco
+vec3 ironbow(float t){
+  t = clamp(t, 0.0, 1.0);
+  vec3 c = mix(vec3(0.0, 0.0, 0.04), vec3(0.22, 0.0, 0.42), smoothstep(0.0, 0.3, t));
+  c = mix(c, vec3(0.85, 0.08, 0.25), smoothstep(0.3, 0.52, t));
+  c = mix(c, vec3(1.0, 0.55, 0.0), smoothstep(0.52, 0.74, t));
+  c = mix(c, vec3(1.0, 1.0, 0.85), smoothstep(0.74, 0.95, t));
+  return c;
+}
+
 vec3 src(vec2 uv){
   vec3 c = texture2D(tScene, uv).rgb;
   c = pow(max(c, 0.0), vec3(1.0/2.2));          // lineal -> pantalla
+  if (uThermal > 0.5) c = ironbow(dot(c, vec3(0.3, 0.59, 0.11)) * 1.05);
   vec4 h = texture2D(tHud, uv);
   return mix(c, h.rgb, h.a);
 }
@@ -69,7 +81,7 @@ void main(){
 
   // ruido y estática
   float n = hash(vUv * uOut + fract(uTime) * 100.0);
-  col += (n - 0.5) * (0.035 + uStatic * 0.6);
+  col += (n - 0.5) * (0.035 + uStatic * 0.6 + uThermal * 0.04);
   col = mix(col, vec3(n), uStatic * 0.35);
 
   // parpadeo de red eléctrica
@@ -90,7 +102,7 @@ export function createCRT(renderer) {
     uniforms: {
       tScene: { value: null }, tHud: { value: null }, uTime: { value: 0 },
       uRes: { value: new THREE.Vector2(1, 1) }, uOut: { value: new THREE.Vector2(1, 1) },
-      uPalette: { value: 0 }, uShake: { value: 0 }, uFlash: { value: 0 }, uStatic: { value: 0 },
+      uPalette: { value: 0 }, uShake: { value: 0 }, uFlash: { value: 0 }, uStatic: { value: 0 }, uThermal: { value: 0 },
     },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
     fragmentShader: frag,
