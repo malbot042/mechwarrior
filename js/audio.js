@@ -67,6 +67,7 @@ export const sfx = {
   powerup() { if (!ctx) return; const o = out(1); osc('sawtooth', 40, 500, 1.2, 0.12, o); },
   tree(v = 1) { if (!ok(v)) return; const o = out(v); noise('bandpass', 1800, 300, 1.2, 0.5, 0.45, o); noise('lowpass', 400, 80, 1, 0.8, 0.4, o); },
   splash(v = 1) { if (!ok(v)) return; const o = out(v); noise('highpass', 900, 2600, 0.7, 0.35, 0.25, o); },
+  jet(v = 0.5) { if (!ok(v)) return; const o = out(v); noise('bandpass', 500, 900, 0.8, 0.16, 0.5, o); },
   radio(v = 0.8) { if (!ok(v)) return; const o = out(v); noise('bandpass', 2400, 1800, 4, 0.12, 0.25, o); osc('square', 1800, 1800, 0.05, 0.05, o); },
   ui() { if (!ctx) return; const o = out(1); osc('square', 660, 990, 0.06, 0.06, o); },
 };

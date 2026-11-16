@@ -116,6 +116,9 @@ function createMech(o) {
     armor: { ...o.armor }, maxArmor: { ...o.armor },
     weapons: o.weapons.map(w => ({ ...w, def: WEAPONS[w.def], cd: Math.random() })),
     alive: true, phase: 0, lastStep: 0, radius: 4 * sc, centerH: 7.2 * sc, hitR: 4.6 * sc, shutdown: 0, deadT: 0,
+    // propulsores: jump = potencia relativa del chasis (0 = sin propulsores)
+    jump: o.jump ?? 0, jumpFuel: 1, jumpBurn: 1 / (1.4 + 0.8 * (o.jump ?? 0)), jumpThrust: 30 + 10 * (o.jump ?? 0),
+    airborne: false, vy: 0, jetting: false,
     ai: o.ai ? { range: o.ai.range, skill: o.ai.skill, t: 2, strafe: Math.random() < 0.5 ? 1 : -1, fireT: 1.5, stuck: 0, avoid: 0 } : null,
     value: o.value ?? 100,
   };
@@ -129,7 +132,7 @@ function mechFromChassis(ch, cfg, o = {}) {
   const armor = {};
   for (const k in ch.armor) armor[k] = Math.round(ch.armor[k] * (o.armorMult ?? 1));
   return createMech({
-    isPlayer: o.isPlayer, team: o.team, name: o.name ?? ch.name, colors: o.colors ?? ch.colors, scale: ch.scale, loadout,
+    isPlayer: o.isPlayer, team: o.team, name: o.name ?? ch.name, jump: ch.jump, colors: o.colors ?? ch.colors, scale: ch.scale, loadout,
     maxSpeed: ch.maxSpeed * (o.speedMult ?? 1), turnRate: ch.turnRate, dissip: st.dissip, armor,
     weapons: MOUNTS.filter(m => cfg[m]?.w).map(m => ({ def: cfg[m].w, mount: m, sec: m, group: cfg[m].g })),
     ai: o.ai, value: o.value,
@@ -294,7 +297,7 @@ function hitSection(e, p) {
 
 function damage(e, amount, point, src) {
   if (!e.alive || e.arrived) return;
-  if (src) e.lastHitBy = src;
+  if (src) { e.lastHitBy = src; e.lastHitT = state.time; }
   const sec = hitSection(e, point);
   const before = e.armor[sec];
   e.armor[sec] -= amount;
@@ -497,16 +500,29 @@ function fireWeapon(e, w, aimPoint, target) {
 }
 
 // ---------------------------------------------------------------- movimiento
+// ---- propulsores de salto (iguales para todos los mechs)
+const JUMP = { gravity: 24, heat: 14, regen: 0.3, regenDelay: 0.8, hardLanding: 26 };
+// altura del suelo bajo el mech: terreno o azotea si está encima de un edificio
+function groundAt(e) {
+  let h = heightAt(e.pos.x, e.pos.z);
+  for (const o of world.obstacles) {
+    if (!o.alive || e.pos.y < o.box.max.y - 1.2) continue;
+    if (e.pos.x > o.box.min.x && e.pos.x < o.box.max.x && e.pos.z > o.box.min.z && e.pos.z < o.box.max.z) h = Math.max(h, o.box.max.y);
+  }
+  return h;
+}
+
 function moveEntity(e, dt) {
   const target = e.throttle * e.maxSpeed * (e.shutdown > 0 ? 0 : 1) * (e.inWater ? 0.6 : 1);
-  e.speed += clamp(target - e.speed, -12 * dt, 7 * dt);
+  // en el aire se conserva el impulso horizontal
+  if (!e.airborne) e.speed += clamp(target - e.speed, -12 * dt, 7 * dt);
   const f = fwd(e.heading, _v1);
   const px = e.pos.x, pz = e.pos.z;
   e.pos.x += f.x * e.speed * dt;
   e.pos.z += f.z * e.speed * dt;
-  // obstáculos (círculo vs AABB en XZ)
+  // obstáculos (círculo vs AABB en XZ); por encima del tejado no chocan
   for (const o of world.obstacles) {
-    if (!o.alive) continue;
+    if (!o.alive || e.pos.y >= o.box.max.y - 0.5) continue;
     const cx = clamp(e.pos.x, o.box.min.x, o.box.max.x), cz = clamp(e.pos.z, o.box.min.z, o.box.max.z);
     const dx = e.pos.x - cx, dz = e.pos.z - cz;
     const d2 = dx * dx + dz * dz;
@@ -516,16 +532,56 @@ function moveEntity(e, dt) {
     }
   }
   for (const o of entities) {
-    if (o === e || !o.alive) continue;
+    if (o === e || !o.alive || Math.abs(o.pos.y - e.pos.y) > 6) continue;
     const dx = e.pos.x - o.pos.x, dz = e.pos.z - o.pos.z;
     const r = e.radius + o.radius, d2 = dx * dx + dz * dz;
     if (d2 < r * r) { const d = Math.sqrt(d2) || 0.01; const push = (r - d) * 0.5; e.pos.x += dx / d * push; e.pos.z += dz / d * push; }
   }
   e.pos.x = clamp(e.pos.x, -BOUND, BOUND); e.pos.z = clamp(e.pos.z, -BOUND, BOUND);
-  e.pos.y = heightAt(e.pos.x, e.pos.z);
-  e.inWater = waterLevel() - e.pos.y > 0.6;
+  // vertical: propulsores, caída y aterrizaje
+  const ground = groundAt(e);
+  const jetOn = e.kind === 'mech' && e.jetting && e.jumpFuel > 0 && e.shutdown <= 0 && e.jump > 0;
+  if (jetOn) {
+    if (!e.airborne) {                                   // despegue: impulso hacia delante
+      e.airborne = true; e.vy = 4;
+      e.speed += 6 * e.jump * (e.speed >= -0.5 ? 1 : -1);
+      if (e.isPlayer) lesson('jump');
+    }
+    e.jumpFuel = Math.max(0, e.jumpFuel - dt * e.jumpBurn);
+    e.vy = Math.min(15, e.vy + (e.jumpThrust - JUMP.gravity) * dt);
+    e.heat += JUMP.heat * dt;
+    e.jetT = (e.jetT ?? 0) - dt;
+    if (e.jetT <= 0) { e.jetT = 0.12; sfx.jet(e.isPlayer ? 0.5 : volAt(e.pos) * 0.4); }
+    for (let i = 0; i < 2; i++) {
+      const fx = (i ? 1 : -1) * 1.6 * e.scale;
+      const c = Math.cos(e.heading), sn = Math.sin(e.heading);
+      const p = _v3.set(e.pos.x + c * fx, e.pos.y + 0.5, e.pos.z - sn * fx);
+      particle(p, V().set((Math.random() - 0.5) * 3, -18, (Math.random() - 0.5) * 3), 0xffa040, 0.18, 0.7 * e.scale, -0.5, true);
+      if (Math.random() < 0.5) particle(p, V().set((Math.random() - 0.5) * 4, -6, (Math.random() - 0.5) * 4), 0x5a5550, 1.0, 0.8, 1.6, false);
+    }
+  } else if (e.airborne) e.vy -= JUMP.gravity * dt;
+  if (!e.airborne && e.pos.y > ground + 0.6 && e.kind === 'mech') { e.airborne = true; e.vy = 0; }  // se cae de una azotea
+  if (e.airborne) {
+    e.pos.y += e.vy * dt;
+    if (e.pos.y <= ground && e.vy <= 0) {
+      const impact = -e.vy;
+      e.pos.y = ground; e.vy = 0; e.airborne = false; e.landT = 0;
+      for (let i = 0; i < 10; i++) particle(_v3.set(e.pos.x, ground + 0.5, e.pos.z), V().set(Math.random() - 0.5, 0.15, Math.random() - 0.5).multiplyScalar(22), 0x6a5a48, 0.9, 1.2, 1.5, false);
+      sfx.step(e.isPlayer ? 0.9 : volAt(e.pos) * 0.7);
+      if (e.isPlayer) state.shake = Math.min(1, state.shake + impact * 0.03);
+      if (impact > JUMP.hardLanding) {                  // aterrizaje brusco: daño en piernas
+        damage(e, (impact - JUMP.hardLanding) * 0.6, V().set(e.pos.x, e.pos.y + 1, e.pos.z), null);
+        if (e.isPlayer) msg('¡ATERRIZAJE BRUSCO! PIERNAS DAÑADAS', C.warn, 2);
+      }
+    }
+  } else {
+    e.pos.y = ground;
+    e.landT = (e.landT ?? 1) + dt;
+    if (e.jump > 0 && e.landT > JUMP.regenDelay) e.jumpFuel = Math.min(1, (e.jumpFuel ?? 1) + JUMP.regen * dt);
+  }
+  e.inWater = !e.airborne && waterLevel() - e.pos.y > 0.6;
   // derribar árboles al pasar
-  if (Math.abs(e.speed) > 1.5) {
+  if (Math.abs(e.speed) > 1.5 && !e.airborne) {
     const sg = Math.sign(e.speed);
     const n = world.trample(e.pos.x, e.pos.z, e.radius * 0.85, f.x * sg, f.z * sg);
     if (n) {
@@ -554,8 +610,8 @@ function moveEntity(e, dt) {
   m.root.rotation.y = e.heading;
   if (e.kind === 'mech') {
     m.torso.rotation.y = e.torsoYaw;
-    const amt = clamp(Math.abs(e.speed) / (12 * e.scale), 0, 1);
-    e.phase += e.speed * dt * 0.33 / e.scale;
+    const amt = e.airborne ? 0 : clamp(Math.abs(e.speed) / (12 * e.scale), 0, 1);
+    if (!e.airborne) e.phase += e.speed * dt * 0.33 / e.scale;
     animateMech(m, e.phase, amt, e.pitch);
     const step = Math.floor(e.phase / Math.PI);
     if (step !== e.lastStep) {
@@ -647,6 +703,7 @@ function updatePlayer(dt) {
     p.heading += turn * p.turnRate * dt * (1 - 0.35 * Math.abs(p.speed) / p.baseSpeed);
   }
   if (Math.abs(p.throttle) < 0.04 && !keys.KeyW && !keys.KeyS) p.throttle = 0;
+  p.jetting = !!(keys.ShiftLeft || keys.ShiftRight);
 
   const ax = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
   const ay = (keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0);
@@ -818,7 +875,17 @@ function updateAI(e, dt) {
   if (ai.t < 0) { ai.t = 3 + Math.random() * 4; if (Math.random() < 0.6) ai.strafe *= -1; }
   // atasco -> rodeo
   if (e.throttle > 0.5 && (e.realSpeed ?? 1) < e.maxSpeed * 0.15) ai.stuck += dt; else ai.stuck = Math.max(0, ai.stuck - dt);
-  if (ai.stuck > 0.8) { ai.avoid = 1.5; ai.stuck = 0; ai.strafe *= -1; }
+  if (ai.stuck > 0.8) {
+    ai.stuck = 0;
+    if (e.jump > 0 && e.jumpFuel > 0.6) { ai.jumpT = 1.1; e.throttle = 1; }      // saltar el obstáculo
+    else { ai.avoid = 1.5; ai.strafe *= -1; }
+  }
+  ai.jumpT = (ai.jumpT ?? 0) - dt;
+  if (e.lastHitBy && e.lastHitT !== e.lastHitSeen) {
+    e.lastHitSeen = e.lastHitT;
+    if (e.jump > 0 && e.jumpFuel > 0.8 && Math.random() < 0.15) ai.jumpT = 0.7;    // salto evasivo
+  }
+  e.jetting = ai.jumpT > 0;
   if (ai.avoid > 0) { ai.avoid -= dt; desired = e.heading + 1.2 * ai.strafe; if (!e.throttle) e.throttle = 0.6; }
   if (ai.static) e.throttle = 0;   // diana fija: sólo gira el torso
   else e.heading = wrap(e.heading + clamp(wrap(desired - e.heading), -e.turnRate * dt, e.turnRate * dt));
@@ -1019,6 +1086,14 @@ function drawTopHud() {
   }
   // dirección de piernas y torso
   const ps = proj(_v3.set(p.pos.x, p.pos.y + 1, p.pos.z));
+  if (p.alive && p.airborne) {
+    // en vuelo: línea vertical hasta el suelo para leer la altura
+    const gp = proj(_v1.set(p.pos.x, groundAt(p) + 0.2, p.pos.z)), tp = proj(center(p));
+    g.strokeStyle = C.cyan; g.globalAlpha = 0.6; g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(tp.x, tp.y); g.lineTo(gp.x, gp.y); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+    g.strokeStyle = C.cyan; g.beginPath(); g.ellipse(gp.x, gp.y, 9, 4, 0, 0, Math.PI * 2); g.stroke();
+  }
   if (p.alive) {
     const pc = proj(center(p));
     g.strokeStyle = 'rgba(134,255,156,0.7)'; g.lineWidth = 1.5;
@@ -1073,18 +1148,25 @@ function drawTopHud() {
   txt(g, 'ESP/J G1 · F/K G2 · E/L G3', 132, py + 86, { size: 8, color: C.dim, glow: 0 });
 
   frame(g, VW - 160, py, 152, 92, C.dim, 'SISTEMAS');
-  txt(g, 'CALOR', VW - 152, py + 16, { size: 9 });
-  drawHeat(g, VW - 152, py + 20, 136, 12, p.heat, false, state.time);
-  txt(g, 'ACELERADOR', VW - 152, py + 46, { size: 9 });
+  txt(g, 'CALOR', VW - 152, py + 13, { size: 9 });
+  drawHeat(g, VW - 152, py + 16, 136, 10, p.heat, false, state.time);
+  // propulsores de salto
+  const jf = p.jumpFuel ?? 0;
+  const jcol = p.jetting && jf > 0 ? C.warn : jf > 0.3 ? C.cyan : C.bad;
+  txt(g, p.airborne ? 'SALTO · EN VUELO' : 'SALTO [SHIFT]', VW - 152, py + 37, { size: 9, color: jcol });
+  txt(g, `${Math.round(p.pos.y - heightAt(p.pos.x, p.pos.z))}m`, VW - 16, py + 37, { size: 9, align: 'right', color: p.airborne ? C.white : C.dim, glow: 0 });
+  g.strokeStyle = C.dim; g.strokeRect(VW - 151.5, py + 40.5, 135, 7);
+  g.fillStyle = jcol; g.fillRect(VW - 150, py + 42, 132 * jf, 4);
+  txt(g, 'ACELERADOR', VW - 152, py + 59, { size: 9 });
   const tx = VW - 152, tw = 136;
-  g.strokeStyle = C.dim; g.strokeRect(tx + 0.5, py + 50.5, tw - 1, 11);
+  g.strokeStyle = C.dim; g.strokeRect(tx + 0.5, py + 62.5, tw - 1, 9);
   const zero = tx + tw * 0.4 / 1.4;
   g.fillStyle = p.throttle < 0 ? C.warn : C.main;
   const tv = p.throttle / 1.4 * tw;
-  g.fillRect(Math.min(zero, zero + tv), py + 52, Math.abs(tv), 8);
-  g.strokeStyle = C.white; g.beginPath(); g.moveTo(zero, py + 48); g.lineTo(zero, py + 64); g.stroke();
-  txt(g, `${Math.round(p.speed * 4.5)} KPH`, VW - 152, py + 82, { size: 12 });
-  txt(g, `TORSO ${Math.round(THREE.MathUtils.radToDeg(p.torsoYaw))}°`, VW - 16, py + 82, { size: 9, align: 'right' });
+  g.fillRect(Math.min(zero, zero + tv), py + 64, Math.abs(tv), 6);
+  g.strokeStyle = C.white; g.beginPath(); g.moveTo(zero, py + 60); g.lineTo(zero, py + 74); g.stroke();
+  txt(g, `${Math.round(p.speed * 4.5)} KPH`, VW - 152, py + 87, { size: 12 });
+  txt(g, `TORSO ${Math.round(THREE.MathUtils.radToDeg(p.torsoYaw))}°`, VW - 16, py + 87, { size: 9, align: 'right' });
 }
 
 function drawMenu() {
@@ -1111,7 +1193,7 @@ function drawMenu() {
     'W/S ACELERADOR · A/D GIRAR PIERNAS · X PARAR · C CENTRAR TORSO',
     'EL TORSO SIGUE AL BLANCO MÁS CERCANO · Q/TAB/←→ CAMBIAR BLANCO · R MANUAL',
     'ESPACIO/J GRUPO 1 · F/K GRUPO 2 · E/L GRUPO 3',
-    'V VISIÓN TÉRMICA · T PALETA CRT · ESC PAUSA',
+    'SHIFT PROPULSORES DE SALTO · V VISIÓN TÉRMICA · T PALETA CRT · ESC PAUSA',
     'RATÓN OPCIONAL: CLIC IZQ/DER DISPARA',
   ];
   lines.forEach((l, i) => txt(g, l, cx, 358 + i * 15, { size: 10, align: 'center', color: C.main, glow: 2 }));
@@ -1780,6 +1862,7 @@ const LESSONS = [
   ['g1', 'DISPARA GRUPO 2', 'F / K'],
   ['g2', 'DISPARA GRUPO 3', 'E / L'],
   ['kill', 'DESTRUYE UNA DIANA', ''],
+  ['jump', 'SALTA CON PROPULSORES', 'SHIFT'],
   ['heat', 'SUPERA 70% DE CALOR', 'dispara seguido'],
   ['water', 'REFRÍGERATE EN EL AGUA', 'zona con agua'],
   ['trees', 'DERRIBA UN ÁRBOL', 'atraviesa bosque'],
@@ -2030,7 +2113,7 @@ function drawHangar() {
 
   // ---- panel izquierdo: chasis
   const PW = 236, lx = 12, ly = 52;
-  frame(g, lx, ly, PW, 228, C.dim, 'CHASIS');
+  frame(g, lx, ly, PW, 242, C.dim, 'CHASIS');
   if (sel(0)) { g.fillStyle = 'rgba(134,255,156,0.10)'; g.fillRect(lx + 2, ly + 4, PW - 4, 44); }
   const arrowCol = sel(0) ? C.white : C.dim;
   txt(g, '◄', lx + 12, ly + 26, { size: 16, color: arrowCol });
@@ -2046,19 +2129,20 @@ function drawHangar() {
     ['DAÑO ALFA', `${st.alpha.toFixed(0)}`, st.alpha / 80],
     ['DAÑO/SEG', `${st.dps.toFixed(1)}`, st.dps / 30],
     ['CALOR ALFA', `${st.heat.toFixed(0)}`, st.heat / 40],
+    ['SALTO', `≈${st.jumpH} m`, st.jumpH / 60],
   ];
   rows.forEach(([k, v, f], i) => {
-    const y = ly + 62 + i * 22;
+    const y = ly + 60 + i * 21;
     txt(g, k, lx + 10, y, { size: 9, glow: 2 });
     txt(g, v, lx + PW - 10, y, { size: 10, align: 'right', color: C.white, glow: 2 });
     bar(lx + 10, y + 4, PW - 20, 8, f, k === 'CALOR ALFA' && st.heat > st.dissip * 3 ? C.warn : C.main);
   });
   const secs = st.heat / st.dissip;
-  txt(g, `ALFA COMPLETA → ${secs.toFixed(1)} s PARA DISIPAR`, lx + 10, ly + 202, { size: 9, color: secs > 4 ? C.warn : C.dim, glow: 0 });
-  txt(g, `ALCANCE MÁX ${st.maxRange} m`, lx + 10, ly + 217, { size: 9, color: C.dim, glow: 0 });
+  txt(g, `ALFA COMPLETA → ${secs.toFixed(1)} s PARA DISIPAR`, lx + 10, ly + 220, { size: 9, color: secs > 4 ? C.warn : C.dim, glow: 0 });
+  txt(g, `ALCANCE MÁX ${st.maxRange} m`, lx + 10, ly + 234, { size: 9, color: C.dim, glow: 0 });
 
   // ---- panel de misión: zona y hora
-  const my = ly + 238;
+  const my = ly + 252;
   const mrows = [[ROW('zone'), 'MAPA', ZONES[hangar.zone].name], [ROW('time'), 'HORA', TIMES[hangar.time].name]];
   if (state.battleMode) mrows.push([ROW('obj'), 'OBJET.', OBJ_NAME[hangar.objective]]);
   frame(g, lx, my, PW, 6 + mrows.length * 30, C.dim, 'MISIÓN');

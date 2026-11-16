@@ -22,7 +22,7 @@ export const HEATSINK_PER_TON = 0.8; // disipación extra por tonelada libre
 export const CHASSIS = [
   {
     id: 'halcon', name: 'HALCÓN', cls: 'LIGERO', tons: 35, scale: 0.82,
-    maxSpeed: 21, turnRate: 1.5, dissip: 6, weaponTons: 9,
+    maxSpeed: 21, turnRate: 1.5, dissip: 6, weaponTons: 9, jump: 1.0,
     armor: { CT: 48, LT: 32, RT: 32, LA: 22, RA: 22, LEGS: 40 },
     hard: { LA: 'E', LT: 'M', RT: 'E', RA: 'E' },
     loadout: { LA: 'laser', LT: 'srm4', RT: 'laserS', RA: 'laser' },
@@ -30,7 +30,7 @@ export const CHASSIS = [
   },
   {
     id: 'centinela', name: 'CENTINELA', cls: 'MEDIO', tons: 55, scale: 1,
-    maxSpeed: 16, turnRate: 1.15, dissip: 7, weaponTons: 15,
+    maxSpeed: 16, turnRate: 1.15, dissip: 7, weaponTons: 15, jump: 0.85,
     armor: { CT: 70, LT: 45, RT: 45, LA: 32, RA: 32, LEGS: 55 },
     hard: { LA: 'E', LT: 'M', RT: 'E', RA: 'EB' },
     loadout: { LA: 'laser', LT: 'lrm6', RT: 'laser', RA: 'ppc' },
@@ -38,7 +38,7 @@ export const CHASSIS = [
   },
   {
     id: 'titan', name: 'TITÁN', cls: 'PESADO', tons: 75, scale: 1.15,
-    maxSpeed: 12.5, turnRate: 0.9, dissip: 8, weaponTons: 24,
+    maxSpeed: 12.5, turnRate: 0.9, dissip: 8, weaponTons: 24, jump: 0.65,
     armor: { CT: 95, LT: 62, RT: 62, LA: 45, RA: 45, LEGS: 75 },
     hard: { LA: 'EB', LT: 'M', RT: 'ME', RA: 'EB' },
     loadout: { LA: 'laserL', LT: 'lrm10', RT: 'srm4', RA: 'ac10' },
@@ -46,7 +46,7 @@ export const CHASSIS = [
   },
   {
     id: 'goliat', name: 'GOLIAT', cls: 'ASALTO', tons: 95, scale: 1.3,
-    maxSpeed: 9.5, turnRate: 0.7, dissip: 9, weaponTons: 34,
+    maxSpeed: 9.5, turnRate: 0.7, dissip: 9, weaponTons: 34, jump: 0.45,
     armor: { CT: 125, LT: 85, RT: 85, LA: 60, RA: 60, LEGS: 100 },
     hard: { LA: 'EB', LT: 'M', RT: 'M', RA: 'EB' },
     loadout: { LA: 'ppc', LT: 'lrm10', RT: 'lrm10', RA: 'ac10' },
@@ -87,7 +87,11 @@ export function stats(ch, cfg) {
     alpha += dmg; heat += w.heat; dps += dmg / w.cd; maxRange = Math.max(maxRange, w.range);
   }
   const armor = Object.values(ch.armor).reduce((a, b) => a + b, 0);
-  return { tons, free, dissip, alpha, heat, dps, armor, maxRange, kph: Math.round(ch.maxSpeed * 4.5) };
+  // altura aproximada del salto con el depósito lleno
+  const burn = 1.4 + 0.8 * ch.jump, acc = 30 + 10 * ch.jump - 24;
+  const vmax = Math.min(15, 4 + acc * burn), t1 = Math.max(0, (15 - 4) / acc);
+  const jumpH = Math.round(t1 < burn ? (4 + 15) / 2 * t1 + 15 * (burn - t1) + 15 * 15 / 48 : (4 + vmax) / 2 * burn + vmax * vmax / 48);
+  return { tons, free, dissip, alpha, heat, dps, armor, maxRange, kph: Math.round(ch.maxSpeed * 4.5), jumpH };
 }
 
 export function defaultConfig(ch) {

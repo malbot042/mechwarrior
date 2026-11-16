@@ -49,6 +49,24 @@ En todos los modos, un enemigo sólo se puede **fijar como blanco** (Q/Tab, fija
 
 Si el blanco deja de verse más de 0,6 s se pierde ("BLANCO PERDIDO"). Los enemigos en pantalla pero no visibles aparecen con un recuadro punteado y atenuado, y en el radar como un punto apagado: el radar sigue detectándolos, pero no puedes fijarlos.
 
+### Propulsores de salto
+
+**Shift** mantenido enciende los propulsores. Todos los mechs (también los de la IA) los llevan, con más potencia cuanto más ligero es el chasis:
+
+| Chasis | Altura con depósito lleno |
+|--------|---------------------------|
+| HALCÓN | ≈ 34 m |
+| CENTINELA | ≈ 32 m |
+| TITÁN | ≈ 29 m |
+| GOLIAT | ≈ 25 m |
+
+- Al despegar el mech gana un impulso hacia delante y en el aire **conserva la velocidad** (el acelerador no actúa hasta tocar suelo).
+- El **combustible** se gasta mientras empujas (≈ 2 s de depósito) y se recarga en el suelo tras 0,8 s. Cada segundo de propulsión genera **calor** (14/s).
+- Puedes **saltar por encima de los edificios** y **aterrizar en las azoteas** (se convierten en suelo y desde arriba se ve más lejos: la línea de visión sale de la cabina). Al salir del borde caes.
+- **Aterrizaje brusco**: si tocas suelo a más de 26 m/s las piernas reciben daño. Guarda algo de combustible para frenar la caída.
+- HUD: barra **SALTO** con el combustible y la altura sobre el suelo; en vuelo, una línea discontinua marca el punto de aterrizaje. En el hangar, la fila **SALTO** indica la altura que alcanza cada chasis.
+- La IA salta para superar obstáculos cuando se atasca y, a veces, para esquivar al recibir impactos.
+
 ### Las mismas reglas para todos los mechs
 
 Alcance, visibilidad y enfrentamiento funcionan igual para ti, tus aliados y los enemigos:
@@ -73,7 +91,7 @@ Modo libre para practicar sin presión:
 - **Dianas que reaparecen**: 3 dianas fijas cerca, 2 dianas móviles y un tanque. Cada diana destruida vuelve a aparecer a los 4 s; **N** crea una diana fija más.
 - **Blancos armados (O)**: por defecto las dianas no disparan; con O empiezan a devolver el fuego para practicar con presión real.
 - **Lecciones** que se marcan solas al hacerlas (I oculta/muestra el panel):
-  acelerar · girar piernas · girar torso · cambiar de blanco · disparar cada grupo · destruir una diana · superar el 70 % de calor · refrigerarse en el agua (si la zona tiene) · derribar un árbol (si hay bosque) · visión térmica.
+  acelerar · girar piernas · girar torso · cambiar de blanco · disparar cada grupo · destruir una diana · saltar con propulsores · superar el 70 % de calor · refrigerarse en el agua (si la zona tiene) · derribar un árbol (si hay bosque) · visión térmica.
 - Usa el mismo hangar: puedes probar cualquier chasis, configuración, zona y hora.
 
 ### Batalla 5 vs 5
@@ -123,6 +141,7 @@ Cada orden se confirma por radio (un aliado responde). El panel **ESCUADRA** (ba
 | Espacio / J | Grupo de disparo G1 |
 | F / K | Grupo de disparo G2 |
 | E / L | Grupo de disparo G3 |
+| Shift (mantener) | Propulsores de salto |
 | X | Parar · C centrar torso |
 | V | Visión térmica on/off |
 | T | Paleta CRT: color / ámbar / fósforo verde |
@@ -211,7 +230,7 @@ js/audio.js       efectos de sonido sintetizados
 
 ## Ideas para seguir
 
-- Saltos (jump jets), pantalla de mapa, órdenes individuales por aliado
+- Pantalla de mapa, órdenes individuales por aliado
 - Variante de escolta inversa (emboscar un convoy enemigo)
 - Progresión: créditos por batalla para desbloquear chasis y armas
 - Gamepad, ajustes de sensibilidad, intensidad del efecto CRT
