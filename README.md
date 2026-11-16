@@ -1,5 +1,7 @@
 # STEEL HORIZON — simulador de combate mech (estilo MechWarrior / BattleTech)
 
+**▶ Jugar ahora:** https://malbot042.github.io/mechwarrior/
+
 Juego en HTML + JavaScript con Three.js y post-proceso CRT (pantalla plana, sin esquinas redondeadas). Se juega **solo con teclado**; el ratón es opcional.
 
 ## Cómo jugar
@@ -11,7 +13,7 @@ python3 -m http.server 8000
 # abre http://localhost:8000
 ```
 
-También funciona tal cual en GitHub Pages.
+También funciona tal cual en GitHub Pages: la versión publicada de este repositorio está en https://malbot042.github.io/mechwarrior/
 
 ### Flujo
 
